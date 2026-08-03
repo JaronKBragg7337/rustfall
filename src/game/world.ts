@@ -82,15 +82,36 @@ function makeBuilder(refs: WorldRefs) {
     return o;
   };
 
-  /** Group placed as one unit, with an optional single collider box. */
-  const unit = (g: THREE.Group, x: number, y: number, z: number, role: string, ry = 0, collide = true) => {
+  /**
+   * Group placed as one unit.
+   *
+   * `collide` matters more than it looks. "box" wraps the whole group in one
+   * Box3 — right for a solid object like a container. For a wall with a doorway
+   * it is catastrophic: the single box spans the opening and seals the door, so
+   * the room becomes unreachable even though it renders as a hole. Wall
+   * assemblies therefore use "children", which gives each jamb, lintel and sill
+   * its own volume and leaves the aperture genuinely open. Meshes tagged
+   * `userData.noCollide` (the swinging door leaf) are skipped.
+   */
+  const unit = (
+    g: THREE.Group, x: number, y: number, z: number, role: string,
+    ry = 0, collide: boolean | "children" = true
+  ) => {
     g.position.set(x, y, z);
     g.rotation.y = ry;
     refs.scene.add(g);
     registerAsset(role, g);
     if (collide) {
       g.updateMatrixWorld(true);
-      refs.colliders.push(new THREE.Box3().setFromObject(g));
+      if (collide === "children") {
+        for (const child of g.children) {
+          if (child.userData.noCollide) continue;
+          const b = new THREE.Box3().setFromObject(child);
+          if (!b.isEmpty()) refs.colliders.push(b);
+        }
+      } else {
+        refs.colliders.push(new THREE.Box3().setFromObject(g));
+      }
     }
     return g;
   };
@@ -136,6 +157,9 @@ function doorAssembly(len: number, mat: THREE.Material, horiz: boolean): THREE.G
   leaf.add(bolts(along([0.12, 0.62, 0.035], [DOOR_W - 0.16, 0.62, 0.035], 4), steel, 0.011));
   leaf.position.set(horiz ? -DOOR_W / 2 : 0, DOOR_H / 2, horiz ? 0 : -DOOR_W / 2);
   leaf.rotation.y = horiz ? -1.15 : -1.15 + Math.PI / 2;
+  // The leaf hangs open across part of the reveal; giving it a collider would
+  // narrow the doorway to less than a body's width.
+  leaf.userData.noCollide = true;
   g.add(leaf);
   for (const hy of [DOOR_H * 0.2, DOOR_H * 0.8]) {
     g.add(hinge(0.16, dark, steel, {
@@ -197,11 +221,17 @@ export function buildWorld(refs: WorldRefs): void {
   for (let i = 0; i < 46; i++) {
     const z = -roadLen / 2 + i * (roadLen / 46) + 2;
     if (rng() < 0.24) continue; // collapsed sections
+    // The road deliberately overruns the map so it fades into fog, but rails
+    // are real assets — keep them inside the world bound.
+    if (Math.abs(z) > WORLD.SIZE / 2 - 2) continue;
     const gx = 14 - 5.4;
-    deco(part(flatBox(0.1, 0.9, 0.1), dark, { pos: [gx, roadY + 0.45, z] }));
-    const beam = part(flatBox(0.05, 0.32, roadLen / 46), S.corrugated(), { pos: [gx + 0.09, roadY + 0.72, z] });
-    deco(beam);
-    if (i % 3 === 0) deco(bolts([{ pos: [gx + 0.12, roadY + 0.72, z], rot: [0, Math.PI / 2, 0] }], steel, 0.014));
+    // Each surviving section is one registered asset, so it carries an ID and a
+    // grid address in the inspection layer instead of being anonymous dressing.
+    const rail = new THREE.Group();
+    rail.add(part(flatBox(0.1, 0.9, 0.1), dark, { pos: [0, 0.45, 0] }));
+    rail.add(part(flatBox(0.05, 0.32, roadLen / 46), S.corrugated(), { pos: [0.09, 0.72, 0] }));
+    if (i % 3 === 0) rail.add(bolts([{ pos: [0.12, 0.72, 0], rot: [0, Math.PI / 2, 0] }], steel, 0.014));
+    unit(rail, gx, roadY, z, "guard rail", 0, false);
   }
   // lane-line wear: patches of exposed aggregate through the paint
   for (let i = 0; i < 30; i++) {
@@ -525,11 +555,11 @@ function buildHomestead(
 
   // ── GROUND FLOOR: exterior ──
   const front = hz - HD / 2, back = hz + HD / 2;
-  unit(doorAssembly(6, brick, true), hx - 3, y0, front, "house front wall", 0);
-  unit(windowAssembly(6, brick, true), hx + 3, y0, front, "house front wall", 0);
-  unit(windowAssembly(6, brick, true), hx - 3, y0, back, "house back wall", 0);
-  unit(windowAssembly(6, brick, true), hx + 3, y0, back, "house back wall", 0);
-  unit(windowAssembly(HD, brick, false), hx - HW / 2, y0, hz, "house west wall", 0);
+  unit(doorAssembly(6, brick, true), hx - 3, y0, front, "house front wall", 0, "children");
+  unit(windowAssembly(6, brick, true), hx + 3, y0, front, "house front wall", 0, "children");
+  unit(windowAssembly(6, brick, true), hx - 3, y0, back, "house back wall", 0, "children");
+  unit(windowAssembly(6, brick, true), hx + 3, y0, back, "house back wall", 0, "children");
+  unit(windowAssembly(HD, brick, false), hx - HW / 2, y0, hz, "house west wall", 0, "children");
   wallSeg(hx + HW / 2, hz, HD, H, false, brick, y0, "house east wall");
 
   // quoins at the corners — separate stones, catching their own light
@@ -540,8 +570,8 @@ function buildHomestead(
   }
 
   // ── GROUND FLOOR: interior partitions ──
-  unit(doorAssembly(HD, plank, false), hx, y0, hz, "interior wall", 0);
-  unit(doorAssembly(6, plank, true), hx + 3, y0, hz, "interior wall", 0);
+  unit(doorAssembly(HD, plank, false), hx, y0, hz, "interior wall", 0, "children");
+  unit(doorAssembly(6, plank, true), hx + 3, y0, hz, "interior wall", 0, "children");
 
   // ── STAIRS: 16 risers at 0.2 m, 0.26 m going — walkable, code-plausible ──
   const RISE = (H + T) / 16, GOING = 0.26;
@@ -567,8 +597,8 @@ function buildHomestead(
 
   const L2b = L2 + T;
   const H2 = H - 0.4;
-  unit(doorAssembly(HD - 2, plank, false), hx + 0.9, L2b, hz + 1, "L2 interior wall", 0);
-  unit(windowAssembly(10.2, brick, true), hx + 0.9, L2b, hz - HD / 2, "L2 wall", 0);
+  unit(doorAssembly(HD - 2, plank, false), hx + 0.9, L2b, hz + 1, "L2 interior wall", 0, "children");
+  unit(windowAssembly(10.2, brick, true), hx + 0.9, L2b, hz - HD / 2, "L2 wall", 0, "children");
   wallSeg(hx + 0.9, hz + HD / 2, 10.2, H2, true, brick, L2b, "L2 wall");
   wallSeg(hx + HW / 2, hz, HD, H2, false, brick, L2b, "L2 wall");
   wallSeg(hx - 4.2, hz - HD / 2, 1.8, H2, true, brick, L2b, "L2 wall");

@@ -3,6 +3,7 @@
 // per-asset ID labels, and bounding volumes — the same scene, another layer.
 import * as THREE from "./three";
 import { WORLD, assetRegistry, gridAddress } from "./constants";
+import { heightAt } from "./terrain";
 import { makeTag } from "./entities";
 
 export type LayerMode = "game" | "inspection";
@@ -16,18 +17,55 @@ export class InspectionLayer {
   mode: LayerMode = "game";
 
   constructor(scene: THREE.Scene) {
-    // 4m module grid across the whole map
-    const grid = new THREE.GridHelper(WORLD.SIZE, WORLD.CELLS, 0x58d6ff, 0x1d4e5e);
-    (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.55;
-    grid.position.y = 0.06;
-    this.group.add(grid);
+    // 4 m module grid across the whole map.
+    //
+    // A flat GridHelper is no use now that the ground undulates: it sits at one
+    // height and the terrain swallows it wherever the ground rises above that.
+    // This grid samples heightAt() along every line and rides a fixed clearance
+    // above the surface, so it stays visible over the whole map.
+    this.group.add(this.buildTerrainGrid());
     // world origin cross
     const origin = makeTag("ORIGIN · L0-H25-R25", "#58d6ff", 1.2);
-    origin.position.set(0, 1.2, 0);
+    origin.position.set(0, heightAt(0, 0) + 1.2, 0);
     this.group.add(origin);
     this.group.visible = false;
     scene.add(this.group);
+  }
+
+  /** Module grid draped over the terrain, held a fixed clearance above it. */
+  private buildTerrainGrid(): THREE.LineSegments {
+    const S = WORLD.SIZE;
+    const half = S / 2;
+    const step = WORLD.MODULE;
+    const sub = 2;          // sample every 2 m so lines follow the slope
+    const lift = 0.18;      // clearance above the surface
+    const pts: number[] = [];
+    const cols: number[] = [];
+    const major = new THREE.Color(0x58d6ff);
+    const minor = new THREE.Color(0x1d4e5e);
+
+    const push = (x: number, z: number, c: THREE.Color) => {
+      pts.push(x, heightAt(x, z) + lift, z);
+      cols.push(c.r, c.g, c.b);
+    };
+
+    for (let i = 0; i <= WORLD.CELLS; i++) {
+      const t = -half + i * step;
+      // every 5th line is a major axis, so the grid stays readable at distance
+      const c = i % 5 === 0 ? major : minor;
+      for (let s = -half; s < half; s += sub) {
+        push(t, s, c); push(t, s + sub, c);   // line along Z
+        push(s, t, c); push(s + sub, t, c);   // line along X
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(cols, 3));
+    return new THREE.LineSegments(
+      geo,
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false })
+    );
   }
 
   setMode(mode: LayerMode) {
@@ -77,7 +115,7 @@ export class InspectionLayer {
         wanted.add(addr);
         if (!this.cellLabels.has(addr)) {
           const sp = makeTag(addr, "#58d6ff", 0.8);
-          sp.position.set(cx, 0.45, cz);
+          sp.position.set(cx, heightAt(cx, cz) + 0.55, cz);
           this.cellLabels.set(addr, sp);
           this.group.add(sp);
         }
@@ -94,7 +132,7 @@ export class InspectionLayer {
   // tops out within 0.35m beneath it (walls sit on slabs, slabs on walls…).
   validate(): { issues: string[] } {
     const issues: string[] = [];
-    const boxes: Array<{ id: string; b: THREE.Box3 }> = [];
+    const boxes: Array<{ id: string; b: THREE.Box3; ground: number }> = [];
     const STATIC_SKIP = new Set(["terrain", "road", "scorch-field", "rust-dunes", "rubble-belt", "mud-flats"]);
     const DYNAMIC = ["player", "shambler", "hostile robot", "worker robot", "helper robot", "BOSS: IRON WARDEN", "vehicle buggy", "vehicle truck", "mech suit"];
     for (const rec of assetRegistry) {
@@ -103,12 +141,16 @@ export class InspectionLayer {
       if (DYNAMIC.includes(rec.role) || rec.role.startsWith("npc")) continue; // actors move; checked at spawn
       const b = new THREE.Box3().setFromObject(rec.object);
       if (b.isEmpty()) continue;
-      boxes.push({ id: rec.id, b });
-      if (b.min.y < -0.3) issues.push(`${rec.id}: buried (${b.min.y.toFixed(2)}m)`);
+      // Ground is a heightfield, not y=0. Measuring against 0 flags every asset
+      // standing on high ground as floating and every one in a dip as buried.
+      const c0 = b.getCenter(new THREE.Vector3());
+      const ground = heightAt(c0.x, c0.z);
+      boxes.push({ id: rec.id, b, ground });
+      if (b.min.y < ground - 0.3) issues.push(`${rec.id}: buried (${(b.min.y - ground).toFixed(2)}m below grade)`);
       if (Math.abs(b.min.x) > WORLD.SIZE / 2 + 5 || Math.abs(b.min.z) > WORLD.SIZE / 2 + 5) issues.push(`${rec.id}: outside scene bounds`);
     }
     for (const a of boxes) {
-      if (a.b.min.y <= 0.3) continue; // ground-supported
+      if (a.b.min.y <= a.ground + 0.3) continue; // resting on grade
       const supported = boxes.some((c) => {
         if (c.id === a.id) return false;
         const dy = a.b.min.y - c.b.max.y;
@@ -117,7 +159,7 @@ export class InspectionLayer {
         const oz = Math.min(a.b.max.z, c.b.max.z) - Math.max(a.b.min.z, c.b.min.z);
         return ox > 0.05 && oz > 0.05; // real horizontal overlap
       });
-      if (!supported) issues.push(`${a.id}: floating (${a.b.min.y.toFixed(2)}m above support)`);
+      if (!supported) issues.push(`${a.id}: floating (${(a.b.min.y - a.ground).toFixed(2)}m above support)`);
     }
     for (let i = 0; i < boxes.length; i++) {
       for (let j = i + 1; j < boxes.length; j++) {

@@ -21,7 +21,7 @@ export { Vector2 } from "three/src/math/Vector2.js";
 export { Vector3 } from "three/src/math/Vector3.js";
 export { Vector4 } from "three/src/math/Vector4.js";
 
-export { BufferAttribute } from "three/src/core/BufferAttribute.js";
+export { BufferAttribute, Float32BufferAttribute } from "three/src/core/BufferAttribute.js";
 export { BufferGeometry } from "three/src/core/BufferGeometry.js";
 export { Clock } from "three/src/core/Clock.js";
 export { Object3D } from "three/src/core/Object3D.js";
@@ -47,6 +47,7 @@ export { SpriteMaterial } from "three/src/materials/SpriteMaterial.js";
 export { Group } from "three/src/objects/Group.js";
 export { InstancedMesh } from "three/src/objects/InstancedMesh.js";
 export { Line } from "three/src/objects/Line.js";
+export { LineSegments } from "three/src/objects/LineSegments.js";
 export { Mesh } from "three/src/objects/Mesh.js";
 export { Sprite } from "three/src/objects/Sprite.js";
 

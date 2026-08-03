@@ -134,15 +134,27 @@ export default function App() {
         </Button>
       </div>
 
+      {/* Tap-away backdrop: on a phone the panel covers most of the view, so it
+          must be dismissible without hunting for the small gear icon again. */}
       {settingsOpen && (
-        <div className="absolute top-11 right-2 sm:top-14 sm:right-4 z-30 w-[min(20rem,calc(100vw-1rem))] rounded-md border border-zinc-600 bg-zinc-950/95 p-3 sm:p-4 text-zinc-200 shadow-2xl">
-          <div className="text-xs font-bold tracking-[0.25em] text-amber-200 mb-3">SETTINGS</div>
-          <div className="rounded border border-cyan-800 bg-cyan-950/30 p-3 mb-3">
+        <div className="absolute inset-0 z-20" onPointerDown={() => setSettingsOpen(false)} />
+      )}
+
+      {settingsOpen && (
+        <div className="absolute top-11 right-2 sm:top-14 sm:right-4 z-30 w-[min(19rem,calc(100vw-1rem))]
+                        max-h-[55vh] overflow-y-auto rounded-md border border-zinc-600 bg-zinc-950/95
+                        p-2.5 sm:p-4 text-zinc-200 shadow-2xl">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[11px] sm:text-xs font-bold tracking-[0.25em] text-amber-200">SETTINGS</div>
+            <button onPointerDown={() => setSettingsOpen(false)}
+              className="w-7 h-7 -mr-1 rounded text-zinc-400 hover:text-zinc-100 text-base leading-none">✕</button>
+          </div>
+          <div className="rounded border border-cyan-800 bg-cyan-950/30 p-2 sm:p-3 mb-2">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-xs font-bold tracking-widest text-cyan-300">WORLD LAYER</div>
-                <div className="text-[10px] text-zinc-400 mt-0.5">
-                  {hud.layer === "inspection" ? "◈ Grid · IDs · addresses · bounds" : "Game: the living wasteland"}
+                <div className="text-[11px] sm:text-xs font-bold tracking-widest text-cyan-300">WORLD LAYER</div>
+                <div className="text-[9px] sm:text-[10px] text-zinc-400 mt-0.5">
+                  {hud.layer === "inspection" ? "◈ Grid · IDs · bounds" : "Game: the living wasteland"}
                 </div>
               </div>
               <Switch checked={hud.layer === "inspection"} onCheckedChange={setLayer} />
