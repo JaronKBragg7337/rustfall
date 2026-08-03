@@ -113,17 +113,83 @@ export const MATERIALS: Record<string, MaterialCard> = {
 };
 
 // Asset registry entry — every placed thing is locatable & inspectable by address.
+/**
+ * Declared intent, so the validator can tell "wrong" from "deliberate".
+ *
+ * This matters more than it looks. A report that lists 67 problems of which 60
+ * are intentional trains you to ignore it, and then it misses the one that is
+ * real. Every exemption here is a promise that the author considered the case —
+ * so anything the report *does* flag is worth looking at.
+ */
+export interface AssetFlags {
+  /** Sits below grade by design: footings, sunk rubble, buried foundations. */
+  belowGrade?: boolean;
+  /** Supported by geometry that is not itself registered (decor on decor). */
+  unsupported?: boolean;
+  /** Overlaps neighbours by design: interlocking rubble, stacked scrap. */
+  interpenetrates?: boolean;
+  /** Moves at runtime; static placement checks do not apply. */
+  dynamic?: boolean;
+  /** Deliberately outside the playable bound (distant set dressing). */
+  outOfBounds?: boolean;
+}
+
 export interface AssetRecord {
   id: string; // stable id, e.g. AST-WALL-0017
   role: string; // semantic role
   address: string; // grid address
   object: THREE.Object3D;
+  flags: AssetFlags;
 }
 
 import type * as THREE from "./three";
+/**
+ * Apertures — doorways and windows that must stay traversable.
+ *
+ * Doctrine Part 2 requires a "blocked apertures" check and Part 6 warns that
+ * auto-generated collision seals doorways. Both were specified and neither was
+ * implemented, which is exactly how a wall ended up standing in a doorway with
+ * nothing to catch it. Registering the hole itself makes the check possible.
+ */
+export interface ApertureRecord {
+  id: string;
+  ownerId: string;
+  /** World-space centre of the clear opening. */
+  center: { x: number; y: number; z: number };
+  /** Clear width and height in metres. */
+  width: number;
+  height: number;
+  /** Axis the opening is cut through: "x" or "z". */
+  axis: "x" | "z";
+}
+
+export const apertureRegistry: ApertureRecord[] = [];
+let apertureCounter = 0;
+
+export function registerAperture(
+  ownerId: string,
+  center: { x: number; y: number; z: number },
+  width: number,
+  height: number,
+  axis: "x" | "z"
+): ApertureRecord {
+  apertureCounter += 1;
+  const rec: ApertureRecord = {
+    id: `APT-${String(apertureCounter).padStart(4, "0")}`,
+    ownerId, center, width, height, axis,
+  };
+  apertureRegistry.push(rec);
+  return rec;
+}
+
 export const assetRegistry: AssetRecord[] = [];
 let assetCounter = 0;
-export function registerAsset(role: string, object: THREE.Object3D, prefix = "AST"): AssetRecord {
+export function registerAsset(
+  role: string,
+  object: THREE.Object3D,
+  prefix = "AST",
+  flags: AssetFlags = {}
+): AssetRecord {
   assetCounter += 1;
   const id = `${prefix}-${role.toUpperCase().replace(/\s+/g, "_")}-${String(assetCounter).padStart(4, "0")}`;
   const rec: AssetRecord = {
@@ -131,7 +197,16 @@ export function registerAsset(role: string, object: THREE.Object3D, prefix = "AS
     role,
     address: gridAddress(object.position.x, object.position.z),
     object,
+    flags,
   };
   assetRegistry.push(rec);
   return rec;
+}
+
+/** Reset between rebuilds so ids stay stable and the registry doesn't accumulate. */
+export function clearAssetRegistry() {
+  assetRegistry.length = 0;
+  apertureRegistry.length = 0;
+  assetCounter = 0;
+  apertureCounter = 0;
 }

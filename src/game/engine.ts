@@ -12,6 +12,7 @@ import { Terrain, heightAt } from "./terrain";
 import { TouchControls, type TouchState } from "./touch";
 import { Cinematic } from "./cinematic";
 import { LootField, LOOTABLE } from "./loot";
+import { sceneReport, assetsNear, diffReports, formatReport, type SceneReport, type AssetSnapshot } from "./report";
 import { Audio } from "./audio";
 import { Particles, DustField } from "./particles";
 
@@ -35,6 +36,7 @@ export interface HudState {
   mechBayOpen: boolean;
   issues: number;
   address: string;
+  nearby: Array<{ id: string; role: string; address: string; clearance: number; dist: number }>;
   muted: boolean;
   timeOfDay: number;
   clock: string;
@@ -80,6 +82,8 @@ export class Game {
   private kills = 0;
   private scrap = 0;
   private lastIssueCount = 0;
+  private nearbyPanel: Array<{ id: string; role: string; address: string; clearance: number; dist: number }> = [];
+  private nearbyTimer = 0;
   private tracer: THREE.Line | null = null;
   private tracerTtl = 0;
   private rings: Ring[] = [];
@@ -96,6 +100,7 @@ export class Game {
   private devMode = false;
   private devManual = false;
   private inSafeZone = false;
+  private baseline: SceneReport | null = null;
   private dayLength = 300;   // seconds for a full cycle
   private timeFrozen = false;
   private weatherTimer = 40;
@@ -342,6 +347,30 @@ export class Game {
   setDustStorm(on: boolean) { this.dustTarget = on ? 0.85 : 0; this.weatherTimer = on ? 45 : 90; }
 
   toggleMute() { this.audio.resume(); this.audio.setMuted(!this.audio.muted); this.audio.ui(); }
+
+  // ── Scene reporting: the machine-readable half of the inspection layer ──
+
+  /** Full structured snapshot: every placed asset plus every detected fault. */
+  report(): SceneReport { return sceneReport(); }
+
+  /** Same thing as pasteable text. */
+  reportText(): string { return formatReport(sceneReport()); }
+
+  /** Assets around the player, nearest first — what the on-screen panel shows. */
+  nearbyAssets(radius = 14, limit = 8): AssetSnapshot[] {
+    return assetsNear(this.player.position, radius, limit);
+  }
+
+  /**
+   * Snapshot now, keep it, and diff a later snapshot against it. This is the
+   * regression check: anything that silently moves, disappears or breaks between
+   * two points in time shows up instead of being found by playing days later.
+   */
+  snapshot(): SceneReport { this.baseline = sceneReport(); return this.baseline; }
+  diffSinceSnapshot() {
+    if (!this.baseline) return null;
+    return diffReports(this.baseline, sceneReport());
+  }
 
   pressInteract() { this.interact(); }
 
@@ -706,6 +735,21 @@ export class Game {
 
     this.sky.update(anchor);
     this.sky.follow(this.camera.position);
+    // The panel is the cheap way to read IDs off a screenshot: text in screen
+    // space, never occluded, never needing OCR of a world-space sprite.
+    if (this.inspection.mode === "inspection") {
+      this.nearbyTimer -= dt;
+      if (this.nearbyTimer <= 0) {
+        this.nearbyTimer = 0.4;
+        this.nearbyPanel = assetsNear(pp, 16, 7).map((a) => ({
+          id: a.id, role: a.role, address: a.address, clearance: a.clearance,
+          dist: +Math.hypot(a.pos[0] - pp.x, a.pos[2] - pp.z).toFixed(1),
+        }));
+      }
+    } else if (this.nearbyPanel.length) {
+      this.nearbyPanel = [];
+    }
+
     this.inspection.update(anchor);
     this.renderer.render(this.scene, this.camera);
 
@@ -741,6 +785,7 @@ export class Game {
       mechStats: this.mode === "MECH" ? this.mech.stats : null,
       mechBayOpen: this.mechBayOpen,
       issues: this.lastIssueCount,
+      nearby: this.inspection.mode === "inspection" ? this.nearbyPanel : [],
       muted: this.audio.muted,
       timeOfDay: this.sky.timeOfDay,
       clock: (() => {

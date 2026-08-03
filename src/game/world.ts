@@ -11,7 +11,7 @@
 //     an object legible at a glance.
 //   · Everything is grounded through terrain.heightAt(), never assumed to be at 0.
 import * as THREE from "./three";
-import { WORLD, registerAsset, QUALITY, makeRng } from "./constants";
+import { WORLD, registerAsset, registerAperture, QUALITY, makeRng, type AssetFlags } from "./constants";
 import { surface, plain } from "./surface";
 import { bev, part, flatBox, cyl, bolts, rivets, along, seam, weld, vent, hinge, gutter, window as windowUnit } from "./kit";
 import { heightAt, normalAt } from "./terrain";
@@ -64,12 +64,12 @@ function makeBuilder(refs: WorldRefs) {
   const solid = (
     w: number, h: number, d: number, mat: THREE.Material,
     x: number, y: number, z: number, role: string,
-    opts: { ry?: number; collide?: boolean; radius?: number } = {}
+    opts: { ry?: number; collide?: boolean; radius?: number; flags?: AssetFlags } = {}
   ): THREE.Mesh => {
     const m = bev(w, h, d, mat, { pos: [x, y + h / 2, z], radius: opts.radius });
     if (opts.ry) m.rotation.y = opts.ry;
     refs.scene.add(m);
-    registerAsset(role, m);
+    registerAsset(role, m, "AST", opts.flags);
     if (opts.collide !== false) {
       m.updateMatrixWorld(true);
       refs.colliders.push(new THREE.Box3().setFromObject(m));
@@ -97,12 +97,21 @@ function makeBuilder(refs: WorldRefs) {
    */
   const unit = (
     g: THREE.Group, x: number, y: number, z: number, role: string,
-    ry = 0, collide: boolean | "children" = true
+    ry = 0, collide: boolean | "children" = true, flags: AssetFlags = {}
   ) => {
     g.position.set(x, y, z);
     g.rotation.y = ry;
     refs.scene.add(g);
-    registerAsset(role, g);
+    const rec = registerAsset(role, g, "AST", flags);
+    const ap = g.userData.aperture as
+      { x: number; y: number; z: number; w: number; h: number; axis: "x" | "z"; glazed?: boolean } | undefined;
+    if (ap && !ap.glazed) {
+      // rotate the local opening into world space alongside the group
+      const ca = Math.cos(ry), sa = Math.sin(ry);
+      registerAperture(rec.id,
+        { x: x + ap.x * ca + ap.z * sa, y: y + ap.y, z: z - ap.x * sa + ap.z * ca },
+        ap.w, ap.h, ry % Math.PI === 0 ? ap.axis : (ap.axis === "x" ? "z" : "x"));
+    }
     if (collide) {
       g.updateMatrixWorld(true);
       if (collide === "children") {
@@ -172,6 +181,9 @@ function doorAssembly(len: number, mat: THREE.Material, horiz: boolean, openingA
   // narrow the doorway to less than a body's width.
   leaf.userData.noCollide = true;
   g.add(leaf);
+  // The hole is the point of the assembly, so record it for the aperture check.
+  g.userData.aperture = { x: horiz ? d : 0, y: DOOR_H / 2, z: horiz ? 0 : d,
+                          w: DOOR_W, h: DOOR_H, axis: horiz ? "z" : "x" };
   for (const hy of [DOOR_H * 0.2, DOOR_H * 0.8]) {
     g.add(hinge(0.16, dark, steel, {
       pos: horiz ? [d - DOOR_W / 2, hy, T / 2 + 0.02] : [T / 2 + 0.02, hy, d - DOOR_W / 2],
@@ -200,6 +212,8 @@ function windowAssembly(len: number, mat: THREE.Material, horiz: boolean): THREE
     ? bev(WIN_W + 0.24, H - head, T + 0.1, mat, { pos: [0, head + (H - head) / 2, 0] })
     : bev(T + 0.1, H - head, WIN_W + 0.24, mat, { pos: [0, head + (H - head) / 2, 0] }));
 
+  g.userData.aperture = { x: 0, y: WIN_SILL + WIN_H / 2, z: 0, w: WIN_W, h: WIN_H,
+                          axis: horiz ? "z" : "x", glazed: true };
   const w = windowUnit(WIN_W, WIN_H, T, S.timber(), S.glass(), plain(0x8d8577, 0.8, 0.05), { mullions: 1 });
   w.position.set(0, WIN_SILL + WIN_H / 2, 0);
   if (!horiz) w.rotation.y = Math.PI / 2;
@@ -242,7 +256,10 @@ export function buildWorld(refs: WorldRefs): void {
     rail.add(part(flatBox(0.1, 0.9, 0.1), dark, { pos: [0, 0.45, 0] }));
     rail.add(part(flatBox(0.05, 0.32, roadLen / 46), S.corrugated(), { pos: [0.09, 0.72, 0] }));
     if (i % 3 === 0) rail.add(bolts([{ pos: [0.12, 0.72, 0], rot: [0, Math.PI / 2, 0] }], steel, 0.014));
-    unit(rail, gx, roadY, z, "guard rail", 0, false);
+    // Grounded per-section, not at one global road level: where the highway pad
+    // overlaps the base pad the grade differs and a shared height leaves rails
+    // hanging in the air.
+    unit(rail, gx, heightAt(gx, z), z, "guard rail", 0, false);
   }
   // lane-line wear: patches of exposed aggregate through the paint
   for (let i = 0; i < 30; i++) {
@@ -279,7 +296,7 @@ export function buildWorld(refs: WorldRefs): void {
         pos: [Math.cos(a) * r, 0.1 + rng() * 0.28, Math.sin(a) * r], rot: [rng(), rng() * 3, rng() * 0.5],
       }));
     }
-    unit(heap, ox, y, oz + M4, "rubble", 0, false);
+    unit(heap, ox, y, oz + M4, "rubble", 0, false, { belowGrade: true, interpenetrates: true });
     deco(part(flatBox(M4 * 2, 0.1, 0.7), S.rubbleMat(), { pos: [ox, y + 0.05, oz - M4 + 0.45], shadow: false }));
   };
   ruinAt(-26, -18, "concrete");
@@ -359,7 +376,8 @@ export function buildWorld(refs: WorldRefs): void {
     }
     solid(1.1, 1.0, 0.1, S.ply(), tx - 1.15, ty + legH + 0.18, tz - 1.7, "tower guard");
     solid(1.1, 1.0, 0.1, S.ply(), tx + 1.15, ty + legH + 0.18, tz - 1.7, "tower guard");
-    solid(4.0, 0.12, 4.0, S.corrugated(), tx, ty + legH + 2.06, tz, "tower roof", { collide: false });
+    solid(4.0, 0.12, 4.0, S.corrugated(), tx, ty + legH + 2.06, tz, "tower roof",
+      { collide: false, flags: { unsupported: true } });
     deco(part(flatBox(4.1, 0.1, 0.14), steel, { pos: [tx, ty + legH + 2.0, tz + 2.0] })); // fascia
     deco(gutter(4.0, steel, { pos: [tx, ty + legH + 1.98, tz + 2.14], downpipe: legH + 1.6 }));
     // ladder up one leg
@@ -420,7 +438,7 @@ export function buildWorld(refs: WorldRefs): void {
         rot: [rng() * 1.2, rng() * 3, rng() * 1.2],
       }));
     }
-    unit(pile, px, py, pz, "scrap pile", 0, false);
+    unit(pile, px, py, pz, "scrap pile", 0, false, { interpenetrates: true });
   }
 
   // sandbag emplacement: staggered courses, not four identical blocks
@@ -479,12 +497,15 @@ export function buildWorld(refs: WorldRefs): void {
     g.add(part(flatBox(L - 0.5, 0.012, W - 0.4), S.rustPlate(), { pos: [0, Hc + 0.006, 0], shadow: false }));
     unit(g, cx, heightAt(cx, cz) + stackY, cz, "container", ry);
   };
-  container(30, -30, 0.2, S.containerBlue);
-  container(33.2, -30.4, -0.15, S.patch);
-  container(30.8, -27, 1.62, S.containerBlue);
-  container(30, -30, 0.2, S.corrugated, 2.591); // stacked
+  // Laid out with real clearance. The previous positions offset neighbours ALONG
+  // their own length, so 6.06 m boxes overlapped each other by up to 2.6 m — the
+  // report caught it, and it is what made the stack read wrong.
+  container(28, -31, 0.06, S.containerBlue);
+  container(28, -28.2, 0.06, S.patch);                  // 2.8 m beam-to-beam
+  container(28, -31, 0.06, S.corrugated, 2.591);        // stacked, exactly one height
+  container(35.5, -29.6, 1.55, S.containerBlue);        // turned across the yard
   container(-46, 22, 0.9, S.containerBlue);
-  container(-43.4, 23.6, 0.75, S.shanty);
+  container(-43.7, 23.8, 0.9, S.shanty);                // offset along local +Z (the beam axis)
 
   // ── THE HOMESTEAD ──────────────────────────────────────────────────────
   buildHomestead(solid, deco, unit);
@@ -550,7 +571,7 @@ export function buildWorld(refs: WorldRefs): void {
           pos: [(rng() - 0.5) * 2.2, 0.1, (rng() - 0.5) * 1.8], rot: [rng(), rng() * 3, rng()],
         }));
       }
-      unit(g, px, py, pz, "debris", rng() * Math.PI, false);
+      unit(g, px, py, pz, "debris", rng() * Math.PI, false, { belowGrade: true, interpenetrates: true });
     }
 
     // lay props back onto the slope instead of standing them bolt upright
@@ -582,7 +603,8 @@ function buildHomestead(
     solid(horiz ? len : T, h, horiz ? T : len, mat, cx, base, cz, role);
 
   // ── plinth: the house sits on a footing course, not on bare dirt ──
-  solid(HW + 0.5, 0.35, HD + 0.5, S.concrete(), hx, y0 - 0.3, hz, "footing", { collide: false });
+  solid(HW + 0.5, 0.35, HD + 0.5, S.concrete(), hx, y0 - 0.3, hz, "footing",
+    { collide: false, flags: { belowGrade: true } });
 
   // ── GROUND FLOOR: exterior ──
   const front = hz - HD / 2, back = hz + HD / 2;
@@ -680,7 +702,7 @@ function buildHomestead(
       const t = -len / 2 + (i * len) / n;
       g.add(part(flatBox(0.045, 1.0, 0.045), steel, { pos: [horiz ? t : 0, 0.5, horiz ? 0 : t] }));
     }
-    unit(g, cx, L2b, cz, "railing", 0, false);
+    unit(g, cx, L2b, cz, "railing", 0, false, { unsupported: true });
   };
   railing(hx - 4.2, hz + 1.3, 5.4, false);
   railing(hx - HW / 2 + 0.05, hz + 1.3, 5.4, false);

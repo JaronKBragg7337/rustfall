@@ -12,7 +12,7 @@ const INITIAL_HUD: HudState = {
   hp: 100, bossHp: null, mode: "FOOT", layer: "game", building: false,
   buildPiece: "", buildLegal: false, buildSnapped: false, buildReason: "", interact: null,
   kills: 0, scrap: 0, vehicleName: null, seatName: null, mechParts: null, mechStats: null,
-  mechBayOpen: false, issues: 0, address: "0, 0, 0", muted: false, timeOfDay: 0.42, clock: "10:04", dust: 0, timeFrozen: false, toast: "", lootLeft: 0,
+  mechBayOpen: false, issues: 0, address: "0, 0, 0", nearby: [], muted: false, timeOfDay: 0.42, clock: "10:04", dust: 0, timeFrozen: false, toast: "", lootLeft: 0,
   firstPerson: false, devMode: false, safe: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
 };
 
@@ -307,6 +307,28 @@ export default function App() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── nearby assets, screen space ──
+          World-space labels get occluded and have to be OCR'd off a screenshot.
+          This is the same data as plain text that always reads cleanly, which is
+          what makes a screenshot enough to describe a bug precisely. */}
+      {hud.layer === "inspection" && hud.nearby.length > 0 && !hud.cinematic && (
+        <div className="absolute right-2 bottom-2 sm:right-4 sm:bottom-4 z-20 w-[min(21rem,calc(100vw-1rem))]
+                        rounded border border-amber-700/70 bg-zinc-950/90 p-2 font-mono text-[9px] sm:text-[10px] leading-snug">
+          <div className="flex items-center justify-between text-amber-300 tracking-widest mb-1">
+            <span>◈ NEAREST ASSETS</span>
+            <span className={hud.issues === 0 ? "text-emerald-400" : "text-red-400"}>{hud.issues} ISSUES</span>
+          </div>
+          <div className="text-zinc-500 mb-1">POS {hud.address}</div>
+          {hud.nearby.map((a) => (
+            <div key={a.id} className="flex gap-2 text-zinc-300">
+              <span className="text-amber-200 shrink-0">{a.id}</span>
+              <span className="text-zinc-500 truncate">{a.role}</span>
+              <span className="ml-auto text-zinc-500 shrink-0">{a.address} · {a.dist}m</span>
+            </div>
+          ))}
         </div>
       )}
 

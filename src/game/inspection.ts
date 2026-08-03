@@ -5,6 +5,7 @@ import * as THREE from "./three";
 import { WORLD, assetRegistry, gridAddress } from "./constants";
 import { heightAt } from "./terrain";
 import { makeTag } from "./entities";
+import { sceneReport } from "./report";
 
 export type LayerMode = "game" | "inspection";
 
@@ -130,56 +131,10 @@ export class InspectionLayer {
     }
   }
 
-  // Validation sweep (Part 2): floating / buried / intersecting assets.
-  // "Floating" is support-aware: an asset above 0.3m is legal if another asset
-  // tops out within 0.35m beneath it (walls sit on slabs, slabs on walls…).
+  // Validation delegates to report.ts, which is the single source of truth for
+  // placement checks — the same data the JSON export and the diff use, so the
+  // on-screen count can never disagree with what a tool reads.
   validate(): { issues: string[] } {
-    const issues: string[] = [];
-    const boxes: Array<{ id: string; b: THREE.Box3; ground: number }> = [];
-    const STATIC_SKIP = new Set(["terrain", "road", "scorch-field", "rust-dunes", "rubble-belt", "mud-flats"]);
-    const DYNAMIC = ["player", "shambler", "hostile robot", "worker robot", "helper robot", "BOSS: IRON WARDEN", "vehicle buggy", "vehicle truck", "mech suit"];
-    for (const rec of assetRegistry) {
-      if (!rec.object.parent) continue;
-      if (STATIC_SKIP.has(rec.role)) continue;
-      if (DYNAMIC.includes(rec.role) || rec.role.startsWith("npc")) continue; // actors move; checked at spawn
-      const b = new THREE.Box3().setFromObject(rec.object);
-      if (b.isEmpty()) continue;
-      // Ground is a heightfield, not y=0. Measuring against 0 flags every asset
-      // standing on high ground as floating and every one in a dip as buried.
-      const c0 = b.getCenter(new THREE.Vector3());
-      const ground = heightAt(c0.x, c0.z);
-      boxes.push({ id: rec.id, b, ground });
-      if (b.min.y < ground - 0.3) issues.push(`${rec.id}: buried (${(b.min.y - ground).toFixed(2)}m below grade)`);
-      if (Math.abs(b.min.x) > WORLD.SIZE / 2 + 5 || Math.abs(b.min.z) > WORLD.SIZE / 2 + 5) issues.push(`${rec.id}: outside scene bounds`);
-    }
-    for (const a of boxes) {
-      if (a.b.min.y <= a.ground + 0.3) continue; // resting on grade
-      const supported = boxes.some((c) => {
-        if (c.id === a.id) return false;
-        // A support may top out slightly ABOVE the asset's base — a chimney is
-        // bedded into the roof slab, a railing into the floor. Only requiring the
-        // support to sit just under the base reported all of those as floating.
-        const dy = a.b.min.y - c.b.max.y;
-        if (dy < -0.45 || dy > 0.35) return false;
-        const ox = Math.min(a.b.max.x, c.b.max.x) - Math.max(a.b.min.x, c.b.min.x);
-        const oz = Math.min(a.b.max.z, c.b.max.z) - Math.max(a.b.min.z, c.b.min.z);
-        return ox > 0.05 && oz > 0.05; // real horizontal overlap
-      });
-      if (!supported) issues.push(`${a.id}: floating (${(a.b.min.y - a.ground).toFixed(2)}m above support)`);
-    }
-    for (let i = 0; i < boxes.length; i++) {
-      for (let j = i + 1; j < boxes.length; j++) {
-        const a = boxes[i], c = boxes[j];
-        if (a.b.intersectsBox(c.b)) {
-          const inter = a.b.clone().intersect(c.b);
-          const size = inter.getSize(new THREE.Vector3());
-          // ignore trivial contact (< 0.4m deep on every axis = adjacency, not clash)
-          if (size.x > 0.4 && size.y > 0.4 && size.z > 0.4) {
-            issues.push(`${a.id} ∩ ${c.id}: solid intersection`);
-          }
-        }
-      }
-    }
-    return { issues };
+    return { issues: sceneReport().issues.map((i) => i.message) };
   }
 }
