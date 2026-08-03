@@ -1,0 +1,107 @@
+// RUSTFALL — world constants & material cards
+// Conventions: 1 unit = 1 meter, right-handed, +Y up, forward +Z, right +X.
+export const WORLD = {
+  SIZE: 200, // meters, square
+  MODULE: 4.0, // structural module
+  WALL_H: 3.0, // wall height
+  THICK: 0.2, // wall/floor thickness
+  SNAP: 1.0, // general snap
+  SNAP_TRIM: 0.5,
+  CELLS: 50, // SIZE / MODULE
+} as const;
+
+// Deterministic RNG — seeded LCG so the whole wasteland is reproducible.
+export function makeRng(seed = 9137) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+// Grid address scheme: every world position maps to a stable label L{level}-H{col}-R{row}
+export function gridAddress(x: number, z: number, level = 0): string {
+  const col = Math.floor((x + WORLD.SIZE / 2) / WORLD.MODULE);
+  const row = Math.floor((z + WORLD.SIZE / 2) / WORLD.MODULE);
+  return `L${level}-H${String(col).padStart(2, "0")}-R${String(row).padStart(2, "0")}`;
+}
+
+export type AtlasName = "terrain" | "metal" | "structure" | "creature";
+
+export interface MaterialCard {
+  id: string;
+  atlas: AtlasName;
+  cell: [number, number]; // [row, col] in the 3x3 atlas, row 0 = top
+  roughness: number;
+  metalness: number;
+  realSize: number; // meters the cropped tile covers at repeat 1
+  seamless: boolean;
+  label: string;
+}
+
+// Material cards (Part 4 doctrine): every surface is data, not a vibe.
+export const MATERIALS: Record<string, MaterialCard> = {
+  TER01: { id: "TEX-TER-01", atlas: "terrain", cell: [0, 0], roughness: 0.95, metalness: 0, realSize: 4, seamless: true, label: "Cracked dirt" },
+  TER02: { id: "TEX-TER-02", atlas: "terrain", cell: [0, 1], roughness: 0.96, metalness: 0, realSize: 3, seamless: true, label: "Rocky soil" },
+  TER03: { id: "TEX-TER-03", atlas: "terrain", cell: [0, 2], roughness: 0.88, metalness: 0, realSize: 4, seamless: true, label: "Weathered asphalt" },
+  TER04: { id: "TEX-TER-04", atlas: "terrain", cell: [1, 0], roughness: 0.94, metalness: 0, realSize: 3, seamless: true, label: "Aggregate concrete" },
+  TER05: { id: "TEX-TER-05", atlas: "terrain", cell: [1, 1], roughness: 0.97, metalness: 0, realSize: 4, seamless: true, label: "Scorched earth" },
+  TER06: { id: "TEX-TER-06", atlas: "terrain", cell: [1, 2], roughness: 0.93, metalness: 0, realSize: 4, seamless: true, label: "Rust sand" },
+  TER07: { id: "TEX-TER-07", atlas: "terrain", cell: [2, 0], roughness: 0.95, metalness: 0, realSize: 3, seamless: true, label: "Rubble" },
+  TER08: { id: "TEX-TER-08", atlas: "terrain", cell: [2, 1], roughness: 0.86, metalness: 0, realSize: 6, seamless: false, label: "Road + lane paint" },
+  TER09: { id: "TEX-TER-09", atlas: "terrain", cell: [2, 2], roughness: 0.94, metalness: 0, realSize: 4, seamless: true, label: "Dry mud" },
+
+  MET01: { id: "TEX-MET-01", atlas: "metal", cell: [0, 0], roughness: 0.78, metalness: 0.7, realSize: 2, seamless: true, label: "Rusted rivet plate" },
+  MET02: { id: "TEX-MET-02", atlas: "metal", cell: [0, 1], roughness: 0.62, metalness: 0.55, realSize: 2, seamless: true, label: "Olive armor" },
+  MET03: { id: "TEX-MET-03", atlas: "metal", cell: [0, 2], roughness: 0.42, metalness: 0.85, realSize: 2, seamless: true, label: "Brushed gunmetal" },
+  MET04: { id: "TEX-MET-04", atlas: "metal", cell: [1, 0], roughness: 0.55, metalness: 0.8, realSize: 2, seamless: true, label: "Corrugated metal" },
+  MET05: { id: "TEX-MET-05", atlas: "metal", cell: [1, 1], roughness: 0.6, metalness: 0.75, realSize: 1.5, seamless: true, label: "Diamond tread" },
+  MET06: { id: "TEX-MET-06", atlas: "metal", cell: [1, 2], roughness: 0.7, metalness: 0.65, realSize: 2, seamless: true, label: "Battle plating" },
+  MET07: { id: "TEX-MET-07", atlas: "metal", cell: [2, 0], roughness: 0.5, metalness: 0.8, realSize: 2, seamless: false, label: "Copper pipework" },
+  MET08: { id: "TEX-MET-08", atlas: "metal", cell: [2, 1], roughness: 0.66, metalness: 0.4, realSize: 2, seamless: true, label: "Hazard stripes" },
+  MET09: { id: "TEX-MET-09", atlas: "metal", cell: [2, 2], roughness: 0.45, metalness: 0.6, realSize: 2, seamless: false, label: "Control panel" },
+
+  STR01: { id: "TEX-STR-01", atlas: "structure", cell: [0, 0], roughness: 0.9, metalness: 0, realSize: 3, seamless: true, label: "Weathered planks" },
+  STR02: { id: "TEX-STR-02", atlas: "structure", cell: [0, 1], roughness: 0.72, metalness: 0.6, realSize: 3, seamless: true, label: "Shanty metal" },
+  STR03: { id: "TEX-STR-03", atlas: "structure", cell: [0, 2], roughness: 0.88, metalness: 0, realSize: 3, seamless: true, label: "Old brick" },
+  STR04: { id: "TEX-STR-04", atlas: "structure", cell: [1, 0], roughness: 0.92, metalness: 0, realSize: 4, seamless: true, label: "Graffiti concrete" },
+  STR05: { id: "TEX-STR-05", atlas: "structure", cell: [1, 1], roughness: 0.74, metalness: 0.5, realSize: 3, seamless: true, label: "Scrap patchwork" },
+  STR06: { id: "TEX-STR-06", atlas: "structure", cell: [1, 2], roughness: 0.96, metalness: 0, realSize: 2, seamless: true, label: "Sandbags" },
+  STR07: { id: "TEX-STR-07", atlas: "structure", cell: [2, 0], roughness: 0.6, metalness: 0.7, realSize: 2, seamless: true, label: "Chain-link" },
+  STR08: { id: "TEX-STR-08", atlas: "structure", cell: [2, 1], roughness: 0.9, metalness: 0, realSize: 2, seamless: false, label: "Plywood barricade" },
+  STR09: { id: "TEX-STR-09", atlas: "structure", cell: [2, 2], roughness: 0.68, metalness: 0.6, realSize: 2.5, seamless: false, label: "Container blue" },
+
+  CRV01: { id: "TEX-CRV-01", atlas: "creature", cell: [0, 0], roughness: 0.85, metalness: 0, realSize: 1, seamless: true, label: "Decayed flesh" },
+  CRV02: { id: "TEX-CRV-02", atlas: "creature", cell: [0, 1], roughness: 0.9, metalness: 0, realSize: 1, seamless: true, label: "Bone & sinew" },
+  CRV03: { id: "TEX-CRV-03", atlas: "creature", cell: [0, 2], roughness: 0.95, metalness: 0, realSize: 1, seamless: true, label: "Tire rubber" },
+  CRV04: { id: "TEX-CRV-04", atlas: "creature", cell: [1, 0], roughness: 0.7, metalness: 0.3, realSize: 2, seamless: true, label: "Camo paint" },
+  CRV05: { id: "TEX-CRV-05", atlas: "creature", cell: [1, 1], roughness: 0.94, metalness: 0, realSize: 1.5, seamless: true, label: "Olive canvas" },
+  CRV06: { id: "TEX-CRV-06", atlas: "creature", cell: [1, 2], roughness: 0.88, metalness: 0, realSize: 1.5, seamless: false, label: "Worn leather" },
+  CRV07: { id: "TEX-CRV-07", atlas: "creature", cell: [2, 0], roughness: 0.75, metalness: 0.5, realSize: 1, seamless: false, label: "Hazard barrel" },
+  CRV08: { id: "TEX-CRV-08", atlas: "creature", cell: [2, 1], roughness: 0.3, metalness: 0.1, realSize: 1.5, seamless: true, label: "Cracked glass" },
+  CRV09: { id: "TEX-CRV-09", atlas: "creature", cell: [2, 2], roughness: 0.4, metalness: 0.5, realSize: 2, seamless: true, label: "Energy cells" },
+};
+
+// Asset registry entry — every placed thing is locatable & inspectable by address.
+export interface AssetRecord {
+  id: string; // stable id, e.g. AST-WALL-0017
+  role: string; // semantic role
+  address: string; // grid address
+  object: THREE.Object3D;
+}
+
+import type * as THREE from "three";
+export const assetRegistry: AssetRecord[] = [];
+let assetCounter = 0;
+export function registerAsset(role: string, object: THREE.Object3D, prefix = "AST"): AssetRecord {
+  assetCounter += 1;
+  const id = `${prefix}-${role.toUpperCase().replace(/\s+/g, "_")}-${String(assetCounter).padStart(4, "0")}`;
+  const rec: AssetRecord = {
+    id,
+    role,
+    address: gridAddress(object.position.x, object.position.z),
+    object,
+  };
+  assetRegistry.push(rec);
+  return rec;
+}
