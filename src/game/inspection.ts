@@ -153,8 +153,11 @@ export class InspectionLayer {
       if (a.b.min.y <= a.ground + 0.3) continue; // resting on grade
       const supported = boxes.some((c) => {
         if (c.id === a.id) return false;
+        // A support may top out slightly ABOVE the asset's base — a chimney is
+        // bedded into the roof slab, a railing into the floor. Only requiring the
+        // support to sit just under the base reported all of those as floating.
         const dy = a.b.min.y - c.b.max.y;
-        if (dy < -0.05 || dy > 0.35) return false; // support top must be just beneath
+        if (dy < -0.45 || dy > 0.35) return false;
         const ox = Math.min(a.b.max.x, c.b.max.x) - Math.max(a.b.min.x, c.b.min.x);
         const oz = Math.min(a.b.max.z, c.b.max.z) - Math.max(a.b.min.z, c.b.min.z);
         return ox > 0.05 && oz > 0.05; // real horizontal overlap

@@ -591,7 +591,11 @@ function buildHomestead(
 
   // ── LEVEL 2 ──
   solid(10.2, T, HD, plank, hx + 0.9, L2, hz, "floor slab L2");
-  solid(1.7, T, 1.4, plank, stairX, L2, hz - HD / 2 + 0.7, "stair landing");
+  // Landing must bridge the stair head (z 42.87) all the way to the front wall,
+  // and reach the west wall face at x 23.9. Sized 1.7 x 1.4 it stopped at z 41.4,
+  // leaving a 1.7 x 1.34 m hole at the top of the stairs, and stopped at x 24.1,
+  // leaving a 0.2 m slot under the L2 west wall you could see daylight through.
+  solid(1.9, T, 2.9, plank, hx - HW / 2 + 0.85, L2, hz - HD / 2 + 1.45, "stair landing");
   // exposed floor joists under the slab
   for (let i = -4; i <= 4; i++) deco(part(flatBox(9.9, 0.16, 0.09), timber, { pos: [hx + 0.9, L2 - 0.09, hz + i * 0.85] }));
 
@@ -601,7 +605,9 @@ function buildHomestead(
   unit(windowAssembly(10.2, brick, true), hx + 0.9, L2b, hz - HD / 2, "L2 wall", 0, "children");
   wallSeg(hx + 0.9, hz + HD / 2, 10.2, H2, true, brick, L2b, "L2 wall");
   wallSeg(hx + HW / 2, hz, HD, H2, false, brick, L2b, "L2 wall");
-  wallSeg(hx - 4.2, hz - HD / 2, 1.8, H2, true, brick, L2b, "L2 wall");
+  // Runs from the west wall face (x 23.9) to meet the front window assembly at
+  // x 25.8; at 1.8 m it started at x 24.9 and left an 0.8 m slot at the corner.
+  wallSeg(hx - 4.7, hz - HD / 2, 2.8, H2, true, brick, L2b, "L2 wall");
   wallSeg(hx - HW / 2, hz - HD / 2 + 0.7, 1.4, H2, false, brick, L2b, "L2 wall");
 
   // ── ROOF ASSEMBLY over the east half; west half stays an open terrace ──

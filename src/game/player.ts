@@ -65,6 +65,7 @@ export class Player {
   crouching = false;
   private coyote = 0;
   private jumpQueued = 0;
+  private bob = 0;
   private camPos = new THREE.Vector3();
   private camInit = false;
   private curFov: number = FEEL.fov;
@@ -213,6 +214,40 @@ export class Player {
    * Damped orbit camera with a shoulder offset, obstruction pull-in, and a
    * speed-linked FOV nudge that reads as acceleration without moving the camera.
    */
+  /**
+   * First person. The body still exists and still animates — it is only hidden
+   * from this camera — so shadows, hit volumes and NPC reactions are unchanged.
+   * In first person the body yaw is driven by the look direction rather than by
+   * the direction of travel, otherwise strafing spins the camera's own torso
+   * through frame.
+   */
+  updateFirstPerson(cam: THREE.PerspectiveCamera, anchor: THREE.Vector3, dt: number, speed01 = 0) {
+    this.yaw = this.camYaw;
+    this.group.rotation.y = this.yaw;
+
+    const eye = anchor.clone();
+    eye.y += this.eyeHeight;
+    // slight head bob, scaled by speed — enough to feel footfalls, not enough to nauseate
+    eye.y += Math.sin(this.bob) * 0.022 * speed01;
+    eye.x += Math.cos(this.camYaw) * Math.sin(this.bob * 0.5) * 0.012 * speed01;
+    this.bob += dt * (6 + speed01 * 6);
+
+    cam.position.lerp(eye, 1 - Math.exp(-26 * dt));
+    const dir = new THREE.Vector3(
+      Math.sin(this.camYaw) * Math.cos(this.camPitch),
+      -Math.sin(this.camPitch),
+      Math.cos(this.camYaw) * Math.cos(this.camPitch)
+    );
+    cam.lookAt(cam.position.clone().add(dir));
+
+    const wantFov = THREE.MathUtils.lerp(FEEL.fov + 4, FEEL.sprintFov + 6, THREE.MathUtils.clamp(speed01, 0, 1));
+    this.curFov = THREE.MathUtils.damp(this.curFov, wantFov, 6, dt);
+    if (Math.abs(cam.fov - this.curFov) > 0.01) {
+      cam.fov = this.curFov;
+      cam.updateProjectionMatrix();
+    }
+  }
+
   updateCameraRig(
     cam: THREE.PerspectiveCamera,
     colliderMeshes: THREE.Object3D[],

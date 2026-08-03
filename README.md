@@ -58,8 +58,18 @@ real: containers are 6.06 × 2.44 × 2.59 m, doors 1.0 × 2.1 m, stair risers 0.
 | E | Board vehicle (driver seat) / pilot mech / exit |
 | Q | Switch vehicle seat |
 | B, 1–6, R | Build mode, piece select, rotate 90° |
+| V | First person ↔ third person |
 | M | Mech Bay |
 | L | Game ↔ inspection layer |
+| P / Esc | Start / stop the showcase tour |
+
+## Showcase tour
+
+**⚙ Settings → ▶ SHOWCASE TOUR** (or **P**) hands the camera to an automatic tour:
+an authored shot list that orbits each landmark while the world layer flips between
+the game view and the inspection view on its own timer, so the same place is shown
+twice — once as the wasteland, once as the structure underneath. The world keeps
+running while it plays. Skip a shot or exit from the on-screen controls.
 
 **On a phone or tablet:** drag the left half of the screen to move (push past the
 ring to sprint), drag the right half to look, and use the thumb-arc buttons for

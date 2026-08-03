@@ -13,6 +13,7 @@ const INITIAL_HUD: HudState = {
   buildPiece: "", buildLegal: false, buildSnapped: false, buildReason: "", interact: null,
   kills: 0, scrap: 0, vehicleName: null, seatName: null, mechParts: null, mechStats: null,
   mechBayOpen: false, issues: 0, address: "0, 0, 0",
+  firstPerson: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
 };
 
 /**
@@ -79,12 +80,53 @@ export default function App() {
         </div>
       )}
 
-      {/* crosshair */}
-      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10">
-        <div className="w-2 h-2 rounded-full border border-amber-200/80" />
-      </div>
+      {/* crosshair — hidden during the tour, nobody is aiming */}
+      {!hud.cinematic && (
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10">
+          <div className="w-2 h-2 rounded-full border border-amber-200/80" />
+        </div>
+      )}
+
+      {/* ── SHOWCASE TOUR overlay ── */}
+      {hud.cinematic && (
+        <div className="absolute inset-0 z-40 pointer-events-none">
+          {/* letterbox bars sell it as a film and hide the HUD edges */}
+          <div className="absolute inset-x-0 top-0 h-[7vh] bg-black" />
+          <div className="absolute inset-x-0 bottom-0 h-[7vh] bg-black" />
+
+          <div className="absolute left-4 sm:left-8 bottom-[9vh] max-w-[80vw]">
+            <div className="text-[9px] tracking-[0.4em] text-fuchsia-300/90 mb-1">RUSTFALL · SHOWCASE</div>
+            <div className="text-xl sm:text-3xl font-black tracking-[0.16em] text-amber-100 drop-shadow-lg">
+              {hud.shotName}
+            </div>
+            <div className="text-[10px] sm:text-xs tracking-widest text-zinc-300/90 mt-1">{hud.shotCaption}</div>
+            <div className="mt-2 h-[2px] w-40 sm:w-64 bg-white/15">
+              <div className="h-full bg-amber-300/80 transition-[width] duration-200" style={{ width: `${hud.shotProgress * 100}%` }} />
+            </div>
+          </div>
+
+          <div className="absolute right-4 sm:right-8 bottom-[9vh] text-right">
+            <div className={`text-[10px] sm:text-xs tracking-[0.25em] ${hud.layer === "inspection" ? "text-cyan-300" : "text-amber-200"}`}>
+              {hud.layer === "inspection" ? "◈ INSPECTION LAYER" : "◆ GAME LAYER"}
+            </div>
+            <div className="text-[9px] text-zinc-500 mt-0.5 tracking-widest">AUTO-SWITCHING</div>
+          </div>
+
+          <div className="absolute inset-x-0 top-[8vh] flex justify-center gap-2 pointer-events-auto">
+            <button onPointerDown={() => gameRef.current?.nextShot()}
+              className="px-3 py-1.5 rounded-full border border-white/25 bg-black/50 text-zinc-200 text-[10px] tracking-widest backdrop-blur-sm">
+              SKIP ▸
+            </button>
+            <button onPointerDown={() => gameRef.current?.toggleCinematic()}
+              className="px-3 py-1.5 rounded-full border border-white/25 bg-black/50 text-zinc-200 text-[10px] tracking-widest backdrop-blur-sm">
+              ✕ EXIT TOUR
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── top-left vitals: compact on phones so it never eats the viewport ── */}
+      {!hud.cinematic && (
       <div className="absolute top-2 left-2 sm:top-4 sm:left-4 z-20 text-amber-100 pointer-events-none">
         <div className="text-sm sm:text-lg font-black tracking-[0.25em] sm:tracking-[0.3em] drop-shadow">RUSTFALL</div>
         <div className="mt-1 sm:mt-2 w-32 sm:w-52">
@@ -125,14 +167,17 @@ export default function App() {
           </div>
         )}
       </div>
+      )}
 
       {/* ── settings ── */}
+      {!hud.cinematic && (
       <div className="absolute top-2 right-2 sm:top-4 sm:right-4 z-30">
         <Button variant="outline" size="sm" onClick={() => setSettingsOpen(!settingsOpen)}
           className="h-7 px-2 sm:h-8 sm:px-3 bg-zinc-900/80 border-zinc-600 text-zinc-200 hover:bg-zinc-800 tracking-widest text-[10px] sm:text-xs">
           ⚙<span className="hidden sm:inline ml-1">SETTINGS</span>
         </Button>
       </div>
+      )}
 
       {/* Tap-away backdrop: on a phone the panel covers most of the view, so it
           must be dismissible without hunting for the small gear icon again. */}
@@ -160,6 +205,33 @@ export default function App() {
               <Switch checked={hud.layer === "inspection"} onCheckedChange={setLayer} />
             </div>
           </div>
+          {/* view mode */}
+          <div className="rounded border border-zinc-700 bg-zinc-900/40 p-2 sm:p-3 mb-2">
+            <div className="text-[11px] sm:text-xs font-bold tracking-widest text-amber-200 mb-1.5">VIEW</div>
+            <div className="flex gap-1.5">
+              <button onPointerDown={() => g()?.toggleFirstPerson()}
+                className={`flex-1 py-1.5 rounded border text-[10px] tracking-widest ${
+                  hud.firstPerson ? "border-amber-400 text-amber-200 bg-amber-500/15" : "border-zinc-700 text-zinc-400"}`}>
+                {hud.firstPerson ? "● FIRST PERSON" : "FIRST PERSON"}
+              </button>
+              <button onPointerDown={() => g()?.toggleFirstPerson()}
+                className={`flex-1 py-1.5 rounded border text-[10px] tracking-widest ${
+                  !hud.firstPerson ? "border-amber-400 text-amber-200 bg-amber-500/15" : "border-zinc-700 text-zinc-400"}`}>
+                {!hud.firstPerson ? "● THIRD PERSON" : "THIRD PERSON"}
+              </button>
+            </div>
+            <button
+              onPointerDown={() => { g()?.toggleCinematic(); setSettingsOpen(false); }}
+              className="mt-2 w-full py-2 rounded border border-fuchsia-600/70 bg-fuchsia-500/10 text-fuchsia-200
+                         text-[11px] tracking-[0.2em] font-bold active:bg-fuchsia-500/25">
+              ▶ SHOWCASE TOUR
+            </button>
+            <div className="text-[9px] text-zinc-500 mt-1 leading-snug">
+              Hands the camera to an automatic tour of the world, flipping between
+              the game and inspection layers as it goes.
+            </div>
+          </div>
+
           <div className="text-[10px] leading-relaxed text-zinc-400 space-y-1 border-t border-zinc-800 pt-2">
             <div className="flex justify-between"><span>VALIDATION ISSUES</span><span className={hud.issues === 0 ? "text-emerald-400" : "text-red-400"}>{hud.issues}</span></div>
             <div className="flex justify-between"><span>POSITION</span><span className="text-zinc-300">{hud.address}</span></div>
@@ -183,7 +255,7 @@ export default function App() {
       )}
 
       {/* ── interact prompt ── */}
-      {hud.interact && (
+      {hud.interact && !hud.cinematic && (
         <div className="absolute bottom-28 sm:bottom-36 left-1/2 -translate-x-1/2 z-20 rounded border border-amber-500/60 bg-zinc-950/85 px-3 py-1.5 sm:px-4 sm:py-2 text-amber-200 text-[10px] sm:text-xs tracking-[0.2em] whitespace-nowrap">
           {IS_TOUCH ? "▶" : "[E]"} {hud.interact}
         </div>
@@ -248,7 +320,7 @@ export default function App() {
       )}
 
       {/* ── TOUCH: action cluster, placed in the right thumb's natural arc ── */}
-      {IS_TOUCH && ready && (
+      {IS_TOUCH && ready && !hud.cinematic && (
         <div className="absolute z-30 right-3 bottom-5" style={{ paddingRight: "env(safe-area-inset-right)", paddingBottom: "env(safe-area-inset-bottom)" }}>
           <div className="relative w-40 h-40">
             <TouchBtn label="FIRE" className="absolute right-0 bottom-8 w-[68px] h-[68px] text-[11px]"
@@ -276,7 +348,7 @@ export default function App() {
       )}
 
       {/* ── boot hint (desktop only; phones get the buttons instead) ── */}
-      {ready && !IS_TOUCH && (
+      {ready && !IS_TOUCH && !hud.cinematic && (
         <div className="absolute bottom-2 right-4 z-10 text-[10px] text-zinc-500 tracking-widest pointer-events-none">
           CLICK WORLD TO CAPTURE MOUSE · ⚙ SETTINGS → WORLD LAYER
         </div>

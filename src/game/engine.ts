@@ -10,6 +10,7 @@ import { InspectionLayer, type LayerMode } from "./inspection";
 import { Sky } from "./sky";
 import { Terrain, heightAt } from "./terrain";
 import { TouchControls, type TouchState } from "./touch";
+import { Cinematic } from "./cinematic";
 
 export interface HudState {
   hp: number;
@@ -31,6 +32,11 @@ export interface HudState {
   mechBayOpen: boolean;
   issues: number;
   address: string;
+  firstPerson: boolean;
+  cinematic: boolean;
+  shotName: string;
+  shotCaption: string;
+  shotProgress: number;
 }
 
 interface Ring { obj: THREE.Mesh; t: number; }
@@ -72,6 +78,8 @@ export class Game {
   private touch: TouchControls | null = null;
   private actions = { fire: false, jump: false, crouch: false };
   private attackCooldown = 0;
+  private firstPerson = false;
+  private cinema = new Cinematic();
 
   onHud: (h: HudState) => void = () => {};
   onTouch: (t: TouchState | null) => void = () => {};
@@ -161,6 +169,7 @@ export class Game {
 
     this.buildMode = new BuildMode(this.scene, this.colliders);
     this.inspection = new InspectionLayer(this.scene);
+    this.cinema.onLayer = (m) => this.setLayer(m);
 
     // Dev-only handle for the screenshot/inspection harness.
     if (import.meta.env.DEV) {
@@ -181,6 +190,9 @@ export class Game {
     if (e.repeat) return;
     this.keys.add(e.code);
     if (e.code === "KeyL") this.setLayer(this.inspection.mode === "game" ? "inspection" : "game");
+    if (e.code === "KeyV") this.toggleFirstPerson();
+    if (e.code === "KeyP") this.toggleCinematic();
+    if (e.code === "Escape" && this.cinema.active) this.toggleCinematic();
     if (e.code === "KeyB") this.toggleBuild();
     if (e.code === "KeyR" && this.buildMode.active) this.buildMode.rotate();
     if (e.code === "KeyE") this.interact();
@@ -248,6 +260,27 @@ export class Game {
   }
 
   pressInteract() { this.interact(); }
+
+  toggleFirstPerson() {
+    this.firstPerson = !this.firstPerson;
+    // The body keeps simulating and casting shadows; it is only hidden from view.
+    this.player.group.visible = !this.firstPerson && this.mode === "FOOT";
+  }
+
+  /** Hands the camera to the showcase tour, or takes it back. */
+  toggleCinematic() {
+    if (this.cinema.active) {
+      this.cinema.stop();
+      this.setLayer("game");
+      this.player.group.visible = !this.firstPerson && this.mode === "FOOT";
+    } else {
+      this.cinema.start(this.inspection.mode);
+      this.player.group.visible = true; // the tour should show the figure in frame
+      document.exitPointerLock?.();
+    }
+  }
+
+  nextShot() { if (this.cinema.active) this.cinema.next(); }
   toggleBuild() { if (this.buildMode.active) this.buildMode.exit(); else this.buildMode.enter(); }
   rotatePiece() { if (this.buildMode.active) this.buildMode.rotate(); }
   selectPiece(i: number) { if (this.buildMode.active) this.buildMode.select(i); }
@@ -373,9 +406,12 @@ export class Game {
       const look = this.touch.consumeLook();
       if (look.dx || look.dy) this.look(look.dx, look.dy, FEEL.touchLookSens);
     }
+    // The showcase tour owns the camera; the player stops taking input so the
+    // world keeps living (robots work, shamblers roam) without anyone driving.
+    const touring = this.cinema.active;
     const input: MoveInput = {
-      x: THREE.MathUtils.clamp(ix, -1, 1),
-      y: THREE.MathUtils.clamp(iy, -1, 1),
+      x: touring ? 0 : THREE.MathUtils.clamp(ix, -1, 1),
+      y: touring ? 0 : THREE.MathUtils.clamp(iy, -1, 1),
       sprint,
       crouch: k.has("ControlLeft") || k.has("KeyC") || this.actions.crouch,
       jump: k.has("Space") || this.actions.jump,
@@ -459,7 +495,13 @@ export class Game {
     else if (this.mode === "MECH") anchor = this.mech.group.position;
     else anchor = this.player.position;
     const speed01 = this.mode === "FOOT" ? this.player.gait / FEEL.run : 0;
-    this.player.updateCameraRig(this.camera, this.colliderMeshes, anchor, this.mode, dt, speed01);
+    if (this.cinema.active) {
+      this.cinema.update(dt, this.camera);
+    } else if (this.firstPerson && this.mode === "FOOT") {
+      this.player.updateFirstPerson(this.camera, anchor, dt, speed01);
+    } else {
+      this.player.updateCameraRig(this.camera, this.colliderMeshes, anchor, this.mode, dt, speed01);
+    }
 
     this.sky.update(anchor);
     this.sky.follow(this.camera.position);
@@ -493,6 +535,11 @@ export class Game {
       mechBayOpen: this.mechBayOpen,
       issues: this.lastIssueCount,
       address: `${anchor.x.toFixed(1)}, ${anchor.y.toFixed(1)}, ${anchor.z.toFixed(1)}`,
+      firstPerson: this.firstPerson,
+      cinematic: this.cinema.active,
+      shotName: this.cinema.active ? this.cinema.shot.name : "",
+      shotCaption: this.cinema.active ? this.cinema.shot.caption : "",
+      shotProgress: this.cinema.active ? this.cinema.progress : 0,
     });
   };
 

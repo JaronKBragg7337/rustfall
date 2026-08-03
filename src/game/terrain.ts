@@ -90,15 +90,28 @@ function naturalHeight(x: number, z: number): number {
 
 /** Ground height in metres. The authority for terrain, feet and prop grounding. */
 export function heightAt(x: number, z: number): number {
-  let h = naturalHeight(x, z);
+  const natural = naturalHeight(x, z);
+
+  // Take only the pad with the strongest claim, never a chain of them.
+  //
+  // Blending pads sequentially compounds: the highway corridor's 7 m fade reaches
+  // x=27, which is inside the homestead pad, so the ground under the west half of
+  // the house was being dragged toward road level. The house is built off one
+  // datum — heightAt at its centre — so its west wall and stairs ended up 0.4 m
+  // into a ridge. Nearest pad wins, and a point fully inside any pad is exactly
+  // that pad's level.
+  let bestT = 1;
+  let bestLevel = natural;
   for (const p of PADS) {
     const d = rectDist(x, z, p);
     if (d >= p.fade) continue;
-    // t: 0 fully on the pad, 1 fully natural
-    const t = THREE.MathUtils.smoothstep(d, 0, p.fade);
-    h = THREE.MathUtils.lerp(naturalHeight(p.x, p.z), h, t);
+    const t = THREE.MathUtils.smoothstep(d, 0, p.fade); // 0 on the pad, 1 natural
+    if (t < bestT) {
+      bestT = t;
+      bestLevel = naturalHeight(p.x, p.z);
+    }
   }
-  return h;
+  return THREE.MathUtils.lerp(bestLevel, natural, bestT);
 }
 
 /** Surface normal by central difference — used to orient props to the slope. */
