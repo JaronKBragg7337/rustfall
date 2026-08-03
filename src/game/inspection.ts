@@ -25,7 +25,7 @@ export class InspectionLayer {
     // above the surface, so it stays visible over the whole map.
     this.group.add(this.buildTerrainGrid());
     // world origin cross
-    const origin = makeTag("ORIGIN · L0-H25-R25", "#58d6ff", 1.2);
+    const origin = makeTag("ORIGIN · L0-H25-R25", "#58d6ff", 1.2, true);
     origin.position.set(0, heightAt(0, 0) + 1.2, 0);
     this.group.add(origin);
     this.group.visible = false;
@@ -85,10 +85,13 @@ export class InspectionLayer {
       const box = new THREE.Box3().setFromObject(rec.object);
       if (box.isEmpty()) continue;
       const helper = new THREE.Box3Helper(box, new THREE.Color(0xffc455));
+      (helper.material as THREE.Material).depthTest = false;
+      (helper.material as THREE.Material).transparent = true;
+      helper.renderOrder = 890;
       this.group.add(helper);
       this.assetBoxes.push(helper);
       const center = box.getCenter(new THREE.Vector3());
-      const label = makeTag(`${rec.id}\n${rec.role} · ${rec.address}`, "#ffc455", 0.9);
+      const label = makeTag(`${rec.id}\n${rec.role} · ${rec.address}`, "#ffc455", 0.9, true);
       label.position.set(center.x, box.max.y + 0.8, center.z);
       this.group.add(label);
       this.assetLabels.push(label);
@@ -114,7 +117,7 @@ export class InspectionLayer {
         const addr = gridAddress(cx, cz);
         wanted.add(addr);
         if (!this.cellLabels.has(addr)) {
-          const sp = makeTag(addr, "#58d6ff", 0.8);
+          const sp = makeTag(addr, "#58d6ff", 0.8, true);
           sp.position.set(cx, heightAt(cx, cz) + 0.55, cz);
           this.cellLabels.set(addr, sp);
           this.group.add(sp);

@@ -41,6 +41,7 @@ export const FEEL = {
   stepUp: 0.52,
   headroom: 1.75,
   radius: 0.34,
+  climbSpeed: 2.6,
 } as const;
 
 export interface MoveInput {
@@ -50,6 +51,9 @@ export interface MoveInput {
   crouch: boolean;
   jump: boolean;
 }
+
+/** Anything the player can climb. Empty by default so callers can opt in. */
+export type ClimbZones = THREE.Box3[];
 
 export class Player {
   group = new THREE.Group();
@@ -63,6 +67,7 @@ export class Player {
   velocity = new THREE.Vector3();
   grounded = true;
   crouching = false;
+  climbing = false;
   private coyote = 0;
   private jumpQueued = 0;
   private bob = 0;
@@ -109,7 +114,16 @@ export class Player {
     return false;
   }
 
-  move(dt: number, input: MoveInput, colliders: THREE.Box3[]) {
+  /** Is the body inside a climbable volume right now? */
+  private climbZoneAt(p: THREE.Vector3, zones: ClimbZones): THREE.Box3 | null {
+    for (const z of zones) {
+      if (p.x > z.min.x && p.x < z.max.x && p.z > z.min.z && p.z < z.max.z &&
+          p.y > z.min.y - 0.6 && p.y < z.max.y) return z;
+    }
+    return null;
+  }
+
+  move(dt: number, input: MoveInput, colliders: THREE.Box3[], climbZones: ClimbZones = []) {
     const p = this.position;
     const mag = Math.hypot(input.x, input.y);
     const moving = mag >= FEEL.deadZone;
@@ -147,6 +161,31 @@ export class Player {
       while (dy < -Math.PI) dy += Math.PI * 2;
       this.yaw += THREE.MathUtils.clamp(dy, -FEEL.turnSpeed * dt, FEEL.turnSpeed * dt);
       this.group.rotation.y = this.yaw;
+    }
+
+    // ── ladders ──
+    // While climbing, gravity is suspended and forward input drives vertical
+    // travel. Jump detaches, which is the standard escape and avoids the classic
+    // trap of being stuck on a ladder you cannot get off.
+    const zone = this.climbZoneAt(p, climbZones);
+    this.climbing = !!zone && !input.jump;
+    if (zone && this.climbing) {
+      const up = input.y;
+      // Forward input is VERTICAL travel here. Letting it also feed horizontal
+      // velocity walks you off the front of the ladder after about half a second,
+      // which is why the first version only ever got a metre up. Hold the centre
+      // line instead and zero the planar velocity outright.
+      this.velocity.set(0, up * FEEL.climbSpeed, 0);
+      const cx = (zone.min.x + zone.max.x) / 2;
+      const cz = (zone.min.z + zone.max.z) / 2;
+      p.x = THREE.MathUtils.damp(p.x, cx, 12, dt);
+      p.z = THREE.MathUtils.damp(p.z, cz, 12, dt);
+      p.y = THREE.MathUtils.clamp(p.y + this.velocity.y * dt, zone.min.y, zone.max.y);
+      this.grounded = true;   // no fall damage or airborne pose on a ladder
+      this.coyote = FEEL.coyoteTime;
+      this.body.animate(dt, Math.abs(up) * 2.2, FEEL.run);
+      this.group.rotation.y = this.yaw;
+      return;
     }
 
     // ── jump: buffered press, coyote-time takeoff ──

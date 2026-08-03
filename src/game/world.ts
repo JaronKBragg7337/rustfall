@@ -19,6 +19,8 @@ import { heightAt, normalAt } from "./terrain";
 export interface WorldRefs {
   scene: THREE.Scene;
   colliders: THREE.Box3[];
+  /** Volumes the player can ascend — ladders, scaffolds. */
+  climbZones: THREE.Box3[];
 }
 
 const T = WORLD.THICK;   // 0.2 m masonry
@@ -125,29 +127,38 @@ function makeBuilder(refs: WorldRefs) {
  * Masonry wall with a door opening: jambs, a lintel that projects past the
  * reveal, a timber frame, hinges and a handle. The opening stays a real hole.
  */
-function doorAssembly(len: number, mat: THREE.Material, horiz: boolean): THREE.Group {
+function doorAssembly(len: number, mat: THREE.Material, horiz: boolean, openingAt = 0): THREE.Group {
   const g = new THREE.Group();
-  const jamb = (len - DOOR_W) / 2;
-  const off = (len - jamb) / 2;
   const steel = S.steel();
   const dark = S.darkSteel();
   const timber = S.timber();
 
+  // `openingAt` slides the doorway along the wall instead of pinning it to the
+  // centre. Two centred openings on walls that meet at a corner put one wall's
+  // jamb straight through the other wall's doorway — which is exactly how the
+  // living room got sealed off from the workshop.
+  const d = THREE.MathUtils.clamp(openingAt, -(len / 2 - DOOR_W), len / 2 - DOOR_W);
+  const leftLen = Math.max(0, d - DOOR_W / 2 + len / 2);
+  const leftMid = (-len / 2 + (d - DOOR_W / 2)) / 2;
+  const rightLen = Math.max(0, len / 2 - (d + DOOR_W / 2));
+  const rightMid = ((d + DOOR_W / 2) + len / 2) / 2;
+
   const seg = (c: number, l: number) =>
     horiz ? bev(l, H, T, mat, { pos: [c, H / 2, 0] }) : bev(T, H, l, mat, { pos: [0, H / 2, c] });
-  g.add(seg(-off, jamb), seg(off, jamb));
+  if (leftLen > 0.02) g.add(seg(leftMid, leftLen));
+  if (rightLen > 0.02) g.add(seg(rightMid, rightLen));
   // lintel: projects 60 mm proud of the wall face on both sides
   g.add(horiz
-    ? bev(DOOR_W + 0.3, H - DOOR_H, T + 0.12, mat, { pos: [0, DOOR_H + (H - DOOR_H) / 2, 0] })
-    : bev(T + 0.12, H - DOOR_H, DOOR_W + 0.3, mat, { pos: [0, DOOR_H + (H - DOOR_H) / 2, 0] }));
+    ? bev(DOOR_W + 0.3, H - DOOR_H, T + 0.12, mat, { pos: [d, DOOR_H + (H - DOOR_H) / 2, 0] })
+    : bev(T + 0.12, H - DOOR_H, DOOR_W + 0.3, mat, { pos: [0, DOOR_H + (H - DOOR_H) / 2, d] }));
   // timber lining around the reveal
   const lining = (c: number) => horiz
     ? part(flatBox(0.07, DOOR_H, T + 0.02), timber, { pos: [c, DOOR_H / 2, 0] })
     : part(flatBox(T + 0.02, DOOR_H, 0.07), timber, { pos: [0, DOOR_H / 2, c] });
-  g.add(lining(-DOOR_W / 2), lining(DOOR_W / 2));
+  g.add(lining(d - DOOR_W / 2), lining(d + DOOR_W / 2));
   g.add(horiz
-    ? part(flatBox(DOOR_W + 0.14, 0.07, T + 0.02), timber, { pos: [0, DOOR_H, 0] })
-    : part(flatBox(T + 0.02, 0.07, DOOR_W + 0.14), timber, { pos: [0, DOOR_H, 0] }));
+    ? part(flatBox(DOOR_W + 0.14, 0.07, T + 0.02), timber, { pos: [d, DOOR_H, 0] })
+    : part(flatBox(T + 0.02, 0.07, DOOR_W + 0.14), timber, { pos: [0, DOOR_H, d] }));
   // the door itself, hung open against the reveal
   const leaf = new THREE.Group();
   leaf.add(part(flatBox(DOOR_W - 0.04, DOOR_H - 0.06, 0.045), S.ply(), { pos: [(DOOR_W - 0.04) / 2, 0, 0] }));
@@ -155,7 +166,7 @@ function doorAssembly(len: number, mat: THREE.Material, horiz: boolean): THREE.G
   leaf.add(part(flatBox(DOOR_W - 0.12, 0.07, 0.055), timber, { pos: [(DOOR_W - 0.04) / 2, -0.62, 0.005] }));
   leaf.add(part(flatBox(0.05, 0.11, 0.05), dark, { pos: [DOOR_W - 0.16, 0, 0.05] })); // handle
   leaf.add(bolts(along([0.12, 0.62, 0.035], [DOOR_W - 0.16, 0.62, 0.035], 4), steel, 0.011));
-  leaf.position.set(horiz ? -DOOR_W / 2 : 0, DOOR_H / 2, horiz ? 0 : -DOOR_W / 2);
+  leaf.position.set(horiz ? d - DOOR_W / 2 : 0, DOOR_H / 2, horiz ? 0 : d - DOOR_W / 2);
   leaf.rotation.y = horiz ? -1.15 : -1.15 + Math.PI / 2;
   // The leaf hangs open across part of the reveal; giving it a collider would
   // narrow the doorway to less than a body's width.
@@ -163,11 +174,11 @@ function doorAssembly(len: number, mat: THREE.Material, horiz: boolean): THREE.G
   g.add(leaf);
   for (const hy of [DOOR_H * 0.2, DOOR_H * 0.8]) {
     g.add(hinge(0.16, dark, steel, {
-      pos: horiz ? [-DOOR_W / 2, hy, T / 2 + 0.02] : [T / 2 + 0.02, hy, -DOOR_W / 2],
+      pos: horiz ? [d - DOOR_W / 2, hy, T / 2 + 0.02] : [T / 2 + 0.02, hy, d - DOOR_W / 2],
     }));
   }
   // threshold plate
-  g.add(part(flatBox(horiz ? DOOR_W + 0.1 : T + 0.14, 0.035, horiz ? T + 0.14 : DOOR_W + 0.1), dark, { pos: [0, 0.017, 0] }));
+  g.add(part(flatBox(horiz ? DOOR_W + 0.1 : T + 0.14, 0.035, horiz ? T + 0.14 : DOOR_W + 0.1), dark, { pos: [horiz ? d : 0, 0.017, horiz ? 0 : d] }));
   return g;
 }
 
@@ -340,19 +351,39 @@ export function buildWorld(refs: WorldRefs): void {
     for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
       deco(part(flatBox(0.1, 1.9, 0.1), timber, { pos: [tx + lx * 1.7, ty + legH + 1.13, tz + lz * 1.7] }));
     }
-    for (const [ox, oz, w, d] of [[0, -1.7, 3.4, 0.08], [0, 1.7, 3.4, 0.08], [-1.7, 0, 0.08, 3.4], [1.7, 0, 0.08, 3.4]] as const) {
-      deco(part(flatBox(w, 1.0, d), S.ply(), { pos: [tx + ox, ty + legH + 0.68, tz + oz] }));
+    // Waist boarding is SOLID, not dressing. Decorative boards meant you could
+    // walk straight off a 5 m platform, which is how the climb test ended up on
+    // the ground. The ladder side is split to leave the climb-out gap open.
+    for (const [ox, oz, w, d] of [[0, 1.7, 3.4, 0.1], [-1.7, 0, 0.1, 3.4], [1.7, 0, 0.1, 3.4]] as const) {
+      solid(w, 1.0, d, S.ply(), tx + ox, ty + legH + 0.18, tz + oz, "tower guard");
     }
+    solid(1.1, 1.0, 0.1, S.ply(), tx - 1.15, ty + legH + 0.18, tz - 1.7, "tower guard");
+    solid(1.1, 1.0, 0.1, S.ply(), tx + 1.15, ty + legH + 0.18, tz - 1.7, "tower guard");
     solid(4.0, 0.12, 4.0, S.corrugated(), tx, ty + legH + 2.06, tz, "tower roof", { collide: false });
     deco(part(flatBox(4.1, 0.1, 0.14), steel, { pos: [tx, ty + legH + 2.0, tz + 2.0] })); // fascia
     deco(gutter(4.0, steel, { pos: [tx, ty + legH + 1.98, tz + 2.14], downpipe: legH + 1.6 }));
     // ladder up one leg
     for (let i = 0; i < 14; i++) {
-      deco(part(cyl(0.02, 0.02, 0.52, 5), steel, { pos: [tx + 1.5, ty + 0.3 + i * 0.36, tz - 1.86], rot: [0, 0, Math.PI / 2] }));
+      deco(part(cyl(0.02, 0.02, 0.52, 5), steel, { pos: [tx, ty + 0.3 + i * 0.36, tz - 1.86], rot: [0, 0, Math.PI / 2] }));
     }
     for (const rx of [-0.26, 0.26]) {
-      deco(part(flatBox(0.05, legH, 0.05), steel, { pos: [tx + 1.5 + rx, ty + legH / 2, tz - 1.86] }));
+      deco(part(flatBox(0.05, legH, 0.05), steel, { pos: [tx + rx, ty + legH / 2, tz - 1.86] }));
     }
+    // A 20 mm rung is not something a capsule can stand on, so the rungs stay
+    // decorative and the ladder is a climb VOLUME instead. It reaches past the
+    // deck so stepping off the top lands on the deck rather than back down.
+    // Centred on the face, clear of BOTH corner legs. Offset toward a corner the
+    // player's 0.34 m radius overlaps a leg and the side boarding on arrival, which
+    // trips the unstick guard and disables their collision entirely.
+    // Centre sits at z = tz - 1.7, just INSIDE the deck footprint (which starts at
+    // tz - 1.8). Centred on the rungs themselves the exit point is 0.1 m off the
+    // deck edge and you climb to the top only to drop straight back down.
+    // The top stops just above deck level, not above the guard boarding — exit any
+    // higher and the step-up lets you mount the rail and walk off the platform.
+    refs.climbZones.push(new THREE.Box3(
+      new THREE.Vector3(tx - 0.55, ty, tz - 2.2),
+      new THREE.Vector3(tx + 0.55, ty + legH + 0.34, tz - 1.2)
+    ));
   }
 
   // farm plots: raised beds with plank sides, corner stakes, irrigation line
@@ -570,7 +601,9 @@ function buildHomestead(
   }
 
   // ── GROUND FLOOR: interior partitions ──
-  unit(doorAssembly(HD, plank, false), hx, y0, hz, "interior wall", 0, "children");
+  // Opening pushed 2 m toward the front so it opens into the workshop rather
+  // than into the workshop/bedroom divider's end.
+  unit(doorAssembly(HD, plank, false, -2), hx, y0, hz, "interior wall", 0, "children");
   unit(doorAssembly(6, plank, true), hx + 3, y0, hz, "interior wall", 0, "children");
 
   // ── STAIRS: 16 risers at 0.2 m, 0.26 m going — walkable, code-plausible ──

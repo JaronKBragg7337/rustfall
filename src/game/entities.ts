@@ -441,7 +441,16 @@ export class Helper {
   }
 }
 
-export function makeTag(text: string, color = "#ffffff", scale = 1): THREE.Sprite {
+/**
+ * World-space text label.
+ *
+ * `onTop` disables depth testing so the label draws over geometry instead of
+ * being sliced in half by it. Inspection labels must be readable through walls —
+ * a half-occluded asset ID is worse than none, because you cannot tell whether
+ * you are reading 0043 or 0048. NPC name tags keep depth testing so they still
+ * behave like objects in the world.
+ */
+export function makeTag(text: string, color = "#ffffff", scale = 1, onTop = false): THREE.Sprite {
   const lines = text.split("\n");
   const c = document.createElement("canvas");
   const ctx = c.getContext("2d")!;
@@ -460,7 +469,13 @@ export function makeTag(text: string, color = "#ffffff", scale = 1): THREE.Sprit
   lines.forEach((l, i) => ctx2.fillText(l, 12, 24 + i * 32));
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true }));
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex,
+    depthTest: !onTop,
+    depthWrite: !onTop,
+    transparent: true,
+  }));
+  if (onTop) sp.renderOrder = 900;
   sp.scale.set((w / h) * 0.5 * scale, 0.5 * scale, 1);
   return sp;
 }

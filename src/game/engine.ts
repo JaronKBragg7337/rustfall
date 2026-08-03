@@ -63,6 +63,7 @@ export class Game {
   // slices its materials from an empty atlas cache and renders solid black.
   private player!: Player;
   private colliders: THREE.Box3[] = [];
+  private climbZones: THREE.Box3[] = [];
   private colliderMeshes: THREE.Object3D[] = [];
   private occluders: THREE.Object3D[] = [];
   private entities: Entity[] = [];
@@ -145,7 +146,7 @@ export class Game {
     // ── World ──
     this.terrain = new Terrain(QUALITY.mobile ? 140 : 220);
     this.scene.add(this.terrain.mesh);
-    buildWorld({ scene: this.scene, colliders: this.colliders });
+    buildWorld({ scene: this.scene, colliders: this.colliders, climbZones: this.climbZones });
 
     // Static world geometry, captured BEFORE the player and any actors exist, so
     // line-of-sight tests are not blocked by the shooter or the target themselves.
@@ -569,7 +570,7 @@ export class Game {
     if (this.actions.fire && this.mode !== "FOOT") this.attack();
 
     if (this.mode === "FOOT") {
-      this.player.move(dt, input, this.colliders);
+      this.player.move(dt, input, this.colliders, this.climbZones);
     } else if (this.mode === "VEHICLE" && this.currentVehicle) {
       const v = this.currentVehicle;
       if (v.isDriving) v.drive(dt, iy, -ix); // only the DRIVER seat has the wheel
