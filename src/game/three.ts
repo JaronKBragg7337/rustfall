@@ -2,6 +2,7 @@
 // package barrel so Rollup can split its source graph without a chunk cycle.
 export {
   ACESFilmicToneMapping,
+  AdditiveBlending,
   BackSide,
   DoubleSide,
   PCFShadowMap,
@@ -16,6 +17,7 @@ export { Euler } from "three/src/math/Euler.js";
 export { MathUtils } from "three/src/math/MathUtils.js";
 export { Matrix4 } from "three/src/math/Matrix4.js";
 export { Plane } from "three/src/math/Plane.js";
+export { Sphere } from "three/src/math/Sphere.js";
 export { Quaternion } from "three/src/math/Quaternion.js";
 export { Vector2 } from "three/src/math/Vector2.js";
 export { Vector3 } from "three/src/math/Vector3.js";
@@ -62,3 +64,6 @@ export { Scene } from "three/src/scenes/Scene.js";
 export { Box3Helper } from "three/src/helpers/Box3Helper.js";
 export { GridHelper } from "three/src/helpers/GridHelper.js";
 export { WebGLRenderer } from "three/src/renderers/WebGLRenderer.js";
+
+export { PointsMaterial } from "three/src/materials/PointsMaterial.js";
+export { Points } from "three/src/objects/Points.js";

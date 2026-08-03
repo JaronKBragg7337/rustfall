@@ -475,7 +475,9 @@ export class Boss implements Entity {
   dead = false;
   radius = 4.2;
   engaged = false;
+  onStomp: (() => void) | null = null;
   private phase = 0;
+  private lastStompBeat = 0;
   private core: THREE.Mesh;
   private hipL: THREE.Group;
   private hipR: THREE.Group;
@@ -613,6 +615,12 @@ export class Boss implements Entity {
     }
     // heavy two-beat stomp; the whole mass rises on the loaded leg
     const s = Math.sin(this.stride * 1.5);
+    // one stomp per half-cycle of the gait, fired as the foot plants
+    const beat = Math.floor(this.stride * 1.5 / Math.PI);
+    if (moving && beat !== this.lastStompBeat) {
+      this.lastStompBeat = beat;
+      this.onStomp?.();
+    }
     this.hipL.rotation.x = -s * 0.42 * moving;
     this.hipR.rotation.x = s * 0.42 * moving;
     p.y = heightAt(p.x, p.z) + Math.abs(s) * 0.30 * moving;

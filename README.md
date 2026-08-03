@@ -62,6 +62,21 @@ real: containers are 6.06 × 2.44 × 2.59 m, doors 1.0 × 2.1 m, stair risers 0.
 | M | Mech Bay |
 | L | Game ↔ inspection layer |
 | P / Esc | Start / stop the showcase tour |
+| G | Dev mode (invulnerable) |
+
+## Time, weather and sound
+
+The sun moves through a real arc — sky gradient, fog, light colour, shadow
+direction and exposure are all derived from one number, so a full day/night
+cycle costs almost nothing beyond moving it. Night settles at a readable
+moonlight rather than true darkness, with a starfield overhead. Dust storms roll
+through on their own timer, collapsing draw distance, muting the sun and filling
+the air with drifting grit. **⚙ Settings → TIME** lets you scrub, jump to
+dawn/noon/dusk/night, freeze the clock, or summon a storm.
+
+All audio is synthesised at runtime from oscillators and filtered noise — no
+sample library, no download. Footsteps change timbre by surface, and the wind
+bed tracks the weather.
 
 ## Showcase tour
 

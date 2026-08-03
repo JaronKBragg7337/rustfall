@@ -12,6 +12,8 @@ import { Terrain, heightAt } from "./terrain";
 import { TouchControls, type TouchState } from "./touch";
 import { Cinematic } from "./cinematic";
 import { LootField, LOOTABLE } from "./loot";
+import { Audio } from "./audio";
+import { Particles, DustField } from "./particles";
 
 export interface HudState {
   hp: number;
@@ -33,6 +35,11 @@ export interface HudState {
   mechBayOpen: boolean;
   issues: number;
   address: string;
+  muted: boolean;
+  timeOfDay: number;
+  clock: string;
+  dust: number;
+  timeFrozen: boolean;
   toast: string;
   lootLeft: number;
   firstPerson: boolean;
@@ -88,10 +95,19 @@ export class Game {
   private devMode = false;
   private devManual = false;
   private inSafeZone = false;
+  private dayLength = 300;   // seconds for a full cycle
+  private timeFrozen = false;
+  private weatherTimer = 40;
+  private dustTarget = 0;
   private cinema = new Cinematic();
   private loot!: LootField;
   private toast = "";
   private toastTtl = 0;
+  private audio = new Audio();
+  private fx!: Particles;
+  private dustField!: DustField;
+  private stepPhase = 0;
+  private wasGrounded = true;
 
   onHud: (h: HudState) => void = () => {};
   onTouch: (t: TouchState | null) => void = () => {};
@@ -122,6 +138,9 @@ export class Game {
       shadowRadius: QUALITY.shadowRadius,
       shadowMapSize: QUALITY.shadowMapSize,
     });
+
+    this.fx = new Particles(this.scene, QUALITY.mobile ? 320 : 700);
+    this.dustField = new DustField(this.scene, QUALITY.mobile ? 380 : 900);
 
     // ── World ──
     this.terrain = new Terrain(QUALITY.mobile ? 140 : 220);
@@ -175,7 +194,10 @@ export class Game {
         // hit you through walls, so hiding indoors did nothing.
         const clear = this.lineOfSight(from, to);
         this.spawnTracer(from, clear.point, clear.hit ? 0x996655 : 0xff4422);
-        if (!clear.hit) this.damagePlayer(4);
+        this.audio.enemyShot();
+        this.fx.muzzleFlash(from, new THREE.Vector3().subVectors(to, from).normalize());
+        if (clear.hit) { this.audio.shotBlocked(); this.fx.impact(clear.point, new THREE.Vector3().subVectors(from, to).normalize()); }
+        else { this.damagePlayer(4); this.audio.hurt(); }
       };
       this.entities.push(r);
     }
@@ -198,6 +220,11 @@ export class Game {
     );
     for (const h of this.helpers) this.scene.add(h.group);
     this.boss = new Boss(new THREE.Vector3(62, heightAt(62, 62), 62));
+    // only audible when it is actually near you; a 9.6 m walker heard from
+    // across the map is noise rather than menace
+    this.boss.onStomp = () => {
+      if (this.boss.group.position.distanceTo(this.player.position) < 46) this.audio.bossStomp();
+    };
     this.scene.add(this.boss.group);
     this.entities.push(this.boss);
     this.vehicles.push(new Buggy(new THREE.Vector3(16, heightAt(16, -36), -36)));
@@ -227,6 +254,7 @@ export class Game {
   // ── Input: exactly one owner per pointer (doctrine failure law) ──
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.repeat) return;
+    this.audio.resume();
     this.keys.add(e.code);
     if (e.code === "KeyL") this.setLayer(this.inspection.mode === "game" ? "inspection" : "game");
     if (e.code === "KeyV") this.toggleFirstPerson();
@@ -249,6 +277,7 @@ export class Game {
     this.look(e.movementX, e.movementY, FEEL.lookSens);
   };
   private onMouseDown = (e: MouseEvent) => {
+    this.audio.resume(); // browsers refuse audio until a real gesture
     if (e.button !== 0) return;
     if (!IS_TOUCH && document.pointerLockElement !== this.canvas) {
       this.canvas.requestPointerLock();
@@ -272,6 +301,7 @@ export class Game {
       const res = this.buildMode.place();
       if (res) {
         this.spawnRing(res.position, res.snapped ? 0x33ddff : 0x44ff88); // THE snap effect
+        this.audio.build();
         this.pops.push({ obj: res.object, t: 0.16 });
         this.lastIssueCount = this.inspection.mode === "inspection" ? this.inspection.validate().issues.length : this.lastIssueCount;
       }
@@ -289,6 +319,7 @@ export class Game {
     window.addEventListener("blur", this.onBlur);
     if (IS_TOUCH) {
       this.touch = new TouchControls(this.canvas);
+      this.canvas.addEventListener("pointerdown", () => this.audio.resume(), { passive: true });
       this.touch.onChange = () => this.onTouch(this.touch!.state);
     }
   }
@@ -304,6 +335,12 @@ export class Game {
     this.toast = msg;
     this.toastTtl = seconds;
   }
+
+  setTimeOfDay(t: number) { this.sky.setTime(t); }
+  toggleTimeFrozen() { this.timeFrozen = !this.timeFrozen; }
+  setDustStorm(on: boolean) { this.dustTarget = on ? 0.85 : 0; this.weatherTimer = on ? 45 : 90; }
+
+  toggleMute() { this.audio.resume(); this.audio.setMuted(!this.audio.muted); this.audio.ui(); }
 
   pressInteract() { this.interact(); }
 
@@ -356,6 +393,8 @@ export class Game {
         const got = this.loot.take(node);
         this.scrap += got;
         this.say(`+${got} SCRAP · ${node.label}`);
+        this.audio.pickup();
+        this.fx.salvageBurst(new THREE.Vector3(node.pos.x, node.pos.y + 0.5, node.pos.z));
         this.spawnRing(new THREE.Vector3(node.pos.x, node.pos.y + 0.1, node.pos.z), 0xffc455);
         return;
       }
@@ -398,6 +437,7 @@ export class Game {
     // Inspecting means standing still reading labels, which is exactly when a
     // shambler kills you. Dev mode rides along with the layer automatically.
     this.devMode = this.devManual || mode === "inspection";
+    this.audio.layerFlip();
     if (mode === "inspection") this.lastIssueCount = this.inspection.validate().issues.length;
   }
 
@@ -417,6 +457,18 @@ export class Game {
     const hits = ray.intersectObjects(this.occluders, false);
     if (hits.length === 0) return { hit: false, point: b.clone() };
     return { hit: true, point: hits[0].point.clone() };
+  }
+
+  /**
+   * What the player is standing on, for footstep timbre. Derived from position
+   * rather than a raycast: standing clear of grade means a built surface, and
+   * the road corridor and rubble belt are known regions.
+   */
+  private surfaceUnder(p: THREE.Vector3): "dirt" | "metal" | "wood" | "gravel" {
+    if (p.y > heightAt(p.x, p.z) + 0.4) return "wood";      // a floor, deck or stair
+    if (Math.abs(p.x - 14) < 5.2) return "gravel";           // highway
+    if (Math.hypot(p.x - 30, p.z + 52) < 22) return "gravel"; // rubble belt
+    return "dirt";
   }
 
   /** Single funnel for incoming damage, so dev mode and the safe zone hold everywhere. */
@@ -442,14 +494,19 @@ export class Game {
       if (hits.length && (!best || hits[0].distance < best.d)) best = { e, d: hits[0].distance };
     }
     const dmg = this.mode === "MECH" ? this.mech.stats.power : 25;
+    if (this.mode === "MECH") this.audio.mechPunch(); else this.audio.playerShot();
+    this.fx.muzzleFlash(origin.clone().addScaledVector(dir, 0.9), dir);
     const end = origin.clone().addScaledVector(dir, best ? best.d : 30);
     this.spawnTracer(origin, end, this.mode === "MECH" ? 0xffaa33 : 0x9fe8ff);
     if (best) {
+      this.fx.impact(end, dir.clone().negate());
       best.e.damage(dmg);
       if (best.e.dead) {
         this.kills += 1;
         // A kill should leave something behind, or fighting is pure cost.
         this.loot.addDrop(best.e.group.position, 5 + Math.floor(Math.random() * 9));
+        this.audio.robotDeath();
+        this.fx.wreck(best.e.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)));
       }
     }
   }
@@ -544,6 +601,26 @@ export class Game {
     }
     for (const h of this.helpers) h.update(dt);
     this.loot.update(dt, pp);
+
+    // Footsteps: advance a phase by distance covered, not by time, so cadence
+    // follows speed for free and never drifts out of sync with the walk cycle.
+    if (this.mode === "FOOT" && this.player.grounded) {
+      const speed = this.player.gait;
+      if (speed > 0.6) {
+        this.stepPhase += speed * dt;
+        const stride = speed > FEEL.walk * 1.15 ? 1.55 : 1.15;
+        if (this.stepPhase >= stride) {
+          this.stepPhase = 0;
+          const surf = this.surfaceUnder(pp);
+          this.audio.footstep(surf, speed > FEEL.walk * 1.15);
+          if (surf === "dirt" || surf === "gravel") this.fx.footPuff(pp.clone());
+        }
+      } else {
+        this.stepPhase = 0;
+      }
+      if (!this.wasGrounded) this.audio.footstep(this.surfaceUnder(pp), true); // landing
+    }
+    this.wasGrounded = this.player.grounded;
     if (this.toastTtl > 0) {
       this.toastTtl -= dt;
       if (this.toastTtl <= 0) this.toast = "";
@@ -604,6 +681,28 @@ export class Game {
       this.player.updateCameraRig(this.camera, this.colliderMeshes, anchor, this.mode, dt, speed01);
     }
 
+    // ── time of day & weather ──
+    if (!this.timeFrozen) {
+      this.sky.setTime(this.sky.timeOfDay + dt / this.dayLength);
+    }
+    this.weatherTimer -= dt;
+    if (this.weatherTimer <= 0) {
+      // Storms are occasional and short relative to clear weather, so they read
+      // as an event rather than as the normal state of the world.
+      this.dustTarget = Math.random() < 0.32 ? 0.45 + Math.random() * 0.5 : 0;
+      this.weatherTimer = this.dustTarget > 0 ? 25 + Math.random() * 25 : 60 + Math.random() * 90;
+    }
+    if (Math.abs(this.sky.dust - this.dustTarget) > 0.002) {
+      this.sky.setDust(THREE.MathUtils.damp(this.sky.dust, this.dustTarget, 0.35, dt));
+      this.audio.setWind(this.sky.dust);
+    }
+    this.renderer.toneMappingExposure = THREE.MathUtils.damp(
+      this.renderer.toneMappingExposure, this.sky.exposure, 2, dt);
+
+    this.fx.update(dt);
+    this.dustField.intensity = this.sky.dust;
+    this.dustField.update(dt, this.camera.position, new THREE.Vector3(0.82, 0, -0.44));
+
     this.sky.update(anchor);
     this.sky.follow(this.camera.position);
     this.inspection.update(anchor);
@@ -641,6 +740,14 @@ export class Game {
       mechStats: this.mode === "MECH" ? this.mech.stats : null,
       mechBayOpen: this.mechBayOpen,
       issues: this.lastIssueCount,
+      muted: this.audio.muted,
+      timeOfDay: this.sky.timeOfDay,
+      clock: (() => {
+        const mins = Math.round(this.sky.timeOfDay * 1440) % 1440;
+        return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+      })(),
+      dust: this.sky.dust,
+      timeFrozen: this.timeFrozen,
       toast: this.toast,
       lootLeft: this.loot.remaining,
       address: `${anchor.x.toFixed(1)}, ${anchor.y.toFixed(1)}, ${anchor.z.toFixed(1)}`,
@@ -665,6 +772,7 @@ export class Game {
     window.removeEventListener("pointercancel", this.onPointerCancel);
     window.removeEventListener("blur", this.onBlur);
     this.touch?.dispose();
+    this.audio.dispose();
     document.exitPointerLock?.();
     this.renderer.dispose();
   }

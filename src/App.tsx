@@ -12,7 +12,7 @@ const INITIAL_HUD: HudState = {
   hp: 100, bossHp: null, mode: "FOOT", layer: "game", building: false,
   buildPiece: "", buildLegal: false, buildSnapped: false, buildReason: "", interact: null,
   kills: 0, scrap: 0, vehicleName: null, seatName: null, mechParts: null, mechStats: null,
-  mechBayOpen: false, issues: 0, address: "0, 0, 0", toast: "", lootLeft: 0,
+  mechBayOpen: false, issues: 0, address: "0, 0, 0", muted: false, timeOfDay: 0.42, clock: "10:04", dust: 0, timeFrozen: false, toast: "", lootLeft: 0,
   firstPerson: false, devMode: false, safe: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
 };
 
@@ -158,6 +158,14 @@ export default function App() {
           {hud.devMode && (
             <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-fuchsia-400 text-fuchsia-300">⚑ DEV · INVULNERABLE</Badge>
           )}
+          <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-300">
+            🕓 {hud.clock}
+          </Badge>
+          {hud.dust > 0.15 && (
+            <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-orange-500 text-orange-300">
+              🌪 DUST STORM
+            </Badge>
+          )}
           {hud.safe && (
             <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-emerald-400 text-emerald-300">✚ SAFE ZONE</Badge>
           )}
@@ -178,7 +186,11 @@ export default function App() {
 
       {/* ── settings ── */}
       {!hud.cinematic && (
-      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 z-30">
+      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 z-30 flex items-start">
+        <Button variant="outline" size="sm" onPointerDown={() => g()?.toggleMute()}
+          className="h-7 px-2 sm:h-8 sm:px-3 mr-1.5 bg-zinc-900/80 border-zinc-600 text-zinc-200 hover:bg-zinc-800 text-[11px]">
+          {hud.muted ? "🔇" : "🔊"}
+        </Button>
         <Button variant="outline" size="sm" onClick={() => setSettingsOpen(!settingsOpen)}
           className="h-7 px-2 sm:h-8 sm:px-3 bg-zinc-900/80 border-zinc-600 text-zinc-200 hover:bg-zinc-800 tracking-widest text-[10px] sm:text-xs">
           ⚙<span className="hidden sm:inline ml-1">SETTINGS</span>
@@ -212,6 +224,34 @@ export default function App() {
               <Switch checked={hud.layer === "inspection"} onCheckedChange={setLayer} />
             </div>
           </div>
+          {/* time of day */}
+          <div className="rounded border border-zinc-700 bg-zinc-900/40 p-2 sm:p-3 mb-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[11px] sm:text-xs font-bold tracking-widest text-amber-200">TIME · {hud.clock}</div>
+              <button onPointerDown={() => g()?.toggleTimeFrozen()}
+                className={`text-[9px] px-1.5 py-0.5 rounded border tracking-widest ${
+                  hud.timeFrozen ? "border-amber-400 text-amber-200" : "border-zinc-700 text-zinc-500"}`}>
+                {hud.timeFrozen ? "❚❚ FROZEN" : "▶ RUNNING"}
+              </button>
+            </div>
+            <div className="grid grid-cols-4 gap-1">
+              {([["DAWN", 0.25], ["NOON", 0.5], ["DUSK", 0.755], ["NIGHT", 0.0]] as const).map(([label, t]) => (
+                <button key={label} onPointerDown={() => g()?.setTimeOfDay(t)}
+                  className="py-1.5 rounded border border-zinc-700 text-zinc-300 text-[9px] tracking-widest active:border-amber-400 active:text-amber-200">
+                  {label}
+                </button>
+              ))}
+            </div>
+            <input type="range" min={0} max={1} step={0.005} value={hud.timeOfDay}
+              onChange={(e) => g()?.setTimeOfDay(parseFloat(e.target.value))}
+              className="w-full mt-2 accent-amber-400" />
+            <button onPointerDown={() => g()?.setDustStorm(hud.dust < 0.2)}
+              className={`mt-1 w-full py-1.5 rounded border text-[10px] tracking-widest ${
+                hud.dust > 0.2 ? "border-orange-400 text-orange-200 bg-orange-500/15" : "border-zinc-700 text-zinc-400"}`}>
+              {hud.dust > 0.2 ? "🌪 DUST STORM ON" : "SUMMON DUST STORM"}
+            </button>
+          </div>
+
           {/* view mode */}
           <div className="rounded border border-zinc-700 bg-zinc-900/40 p-2 sm:p-3 mb-2">
             <div className="text-[11px] sm:text-xs font-bold tracking-widest text-amber-200 mb-1.5">VIEW</div>
