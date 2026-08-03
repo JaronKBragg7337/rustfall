@@ -6,7 +6,7 @@
 // vents, hinges) that proves the components were fitted rather than booleaned.
 // Moving bodies use object-space surface projection so their materials don't
 // swim across the geometry as they drive around.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { WORLD, makeRng, registerAsset, MATERIALS } from "./constants";
 import { surface, plain } from "./surface";
 import { bev, part, flatBox, cyl, bolts, rivets, along, perimeter, seam, weld, vent, bevelBox } from "./kit";

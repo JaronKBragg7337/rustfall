@@ -9,7 +9,7 @@
 //     so they go through InstancedMesh rather than becoming hundreds of draws.
 //   · Geometry is cached by dimension. The world reuses a few dozen distinct
 //     sizes; building each one once keeps the buffer count sane.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 
 const geoCache = new Map<string, THREE.BufferGeometry>();

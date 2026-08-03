@@ -1,13 +1,13 @@
 // Atlas slicer: crops each labeled 3x3 atlas cell into its own tiling CanvasTexture.
 // Crop excludes the dark gutters and the bottom label strip so the stencil ID
 // stays on the atlas sheet (documentation) and off the wrapped surfaces.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { MATERIALS, type AtlasName, type MaterialCard, makeRng } from "./constants";
 
 // 1536px WebP (~2.4 MB total) rather than the 2048px PNG masters (~32 MB).
 // Cells tile at 2-6 m of world space, so the extra source resolution was never
 // visible — but 32 MB of blocking image load is fatal on a phone connection.
-// The PNG masters stay in public/textures/ as the archival source.
+// The PNG masters stay in assets/atlases/ as the archival source.
 const ATLAS_FILES: Record<AtlasName, string> = {
   terrain: "./textures/atlas_terrain.webp",
   metal: "./textures/atlas_metal.webp",

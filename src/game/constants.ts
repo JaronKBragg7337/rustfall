@@ -108,7 +108,7 @@ export interface AssetRecord {
   object: THREE.Object3D;
 }
 
-import type * as THREE from "three";
+import type * as THREE from "./three";
 export const assetRegistry: AssetRecord[] = [];
 let assetCounter = 0;
 export function registerAsset(role: string, object: THREE.Object3D, prefix = "AST"): AssetRecord {

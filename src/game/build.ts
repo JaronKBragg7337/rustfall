@@ -4,7 +4,7 @@
 //   on walls) with a visible snap effect — assembly is solved, not hand-placed.
 // - Apertures (door openings) are real holes between colliders, never sealed.
 // - Stairs are climbable because the player's step-up solves support.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { WORLD, registerAsset, MATERIALS } from "./constants";
 import { matOf } from "./textures";
 

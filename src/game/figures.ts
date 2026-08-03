@@ -5,7 +5,7 @@
 // boxes. Everything hangs off `hips`; each joint is an empty Group at the
 // rotation centre with the limb mesh offset below it, which is what lets the
 // walk cycle bend a knee rather than shear a shin.
-import * as THREE from "three";
+import * as THREE from "./three";
 import type { MaterialKey } from "./constants";
 import { surface } from "./surface";
 

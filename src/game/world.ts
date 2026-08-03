@@ -10,7 +10,7 @@
 //     stair risers 0.2 m, masonry 0.2 m thick. Proportions are most of what makes
 //     an object legible at a glance.
 //   · Everything is grounded through terrain.heightAt(), never assumed to be at 0.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { WORLD, registerAsset, QUALITY, makeRng } from "./constants";
 import { surface, plain } from "./surface";
 import { bev, part, flatBox, cyl, bolts, rivets, along, seam, weld, vent, hinge, gutter, window as windowUnit } from "./kit";

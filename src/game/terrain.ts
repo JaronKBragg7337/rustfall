@@ -10,7 +10,7 @@
 //
 // heightAt() is the single source of truth: the mesh, the player's feet, entity
 // grounding and prop placement all sample the same function.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { WORLD, MATERIALS } from "./constants";
 import { cardTexture } from "./textures";
 

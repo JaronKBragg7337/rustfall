@@ -1,5 +1,5 @@
 // RUSTFALL engine — scene, loop, input, combat, interactions, layer switching.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { makeRng, QUALITY, IS_TOUCH } from "./constants";
 import { loadAtlases } from "./textures";
 import { buildWorld } from "./world";

@@ -10,7 +10,7 @@
 //   · Real gravity with coyote time and jump buffering. Both are small windows that
 //     forgive imprecise timing; without them a jump-to-ledge feels broken even when
 //     the physics are correct.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { WORLD, registerAsset } from "./constants";
 import { Humanoid, STYLES } from "./figures";
 import { heightAt } from "./terrain";

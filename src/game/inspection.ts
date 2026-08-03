@@ -1,7 +1,7 @@
 // Dual-mode layer system (doctrine Part 5): beauty mode <-> inspection mode.
 // Inspection reveals the world's structure: module grid, grid addresses,
 // per-asset ID labels, and bounding volumes — the same scene, another layer.
-import * as THREE from "three";
+import * as THREE from "./three";
 import { WORLD, assetRegistry, gridAddress } from "./constants";
 import { makeTag } from "./entities";
 

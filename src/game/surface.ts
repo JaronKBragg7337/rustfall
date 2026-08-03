@@ -12,7 +12,7 @@
 //                    breaking the grid without a second texture
 //   · dirt decals  — grime accumulates toward the ground, dust settles on up-faces
 //   · edge wear    — roughness varies with the macro sample instead of being flat
-import * as THREE from "three";
+import * as THREE from "./three";
 import { MATERIALS, type MaterialKey } from "./constants";
 import { cardTexture } from "./textures";
 

@@ -7,7 +7,7 @@
 //      frustum gives ~4.4cm texels, and bias/normalBias kill the remaining acne.
 //   2. Fog, horizon, and sun all come from ONE set of colors, so distant
 //      geometry dissolves into the same air the sky is made of.
-import * as THREE from "three";
+import * as THREE from "./three";
 
 // Sun elevation/azimuth in degrees — low and to the side for long raking shadows.
 const SUN_ELEV = 19;
