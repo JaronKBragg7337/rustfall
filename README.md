@@ -20,21 +20,51 @@ A deterministic post-apocalyptic wasteland survival vertical slice, built with *
 
 Press **L** (or **⚙ Settings → World Layer**) to flip between the game and the **inspection layer**: module grid, grid addresses (`L0-H{col}-R{row}`), per-asset IDs, bounding volumes, and a live validation report (floating / buried / intersecting checks).
 
-## Texture atlases
+## Terrain
 
-All surfaces come from four AI-generated, grid-labeled 3×3 texture atlases (`public/textures/`), sliced at runtime into material cards (id, roughness, metalness, real-world size).
+The ground is a deterministic fBm heightfield with a four-way splat blend (dirt,
+scorch, rust sand, dry mud) and graded flat pads under every structure — the same
+cut-and-fill a real site gets before anything is built. `terrain.heightAt()` is the
+single source of truth: the mesh, the player's feet, entity grounding and prop
+placement all sample it.
+
+## Surfaces
+
+Materials project from position along the dominant normal axis rather than using
+mesh UVs, so **texel density is uniform across every face by construction** — a 4 m
+wall face and its 0.2 m return edge resolve identically. The same shader pass adds
+anti-tiling (a second sample at an incommensurate scale), ground-accumulated grime,
+settled dust on up-faces, and roughness variation for edge wear.
+
+Source atlases are four grid-labeled 3×3 sheets in `public/textures/`, sliced at
+runtime into material cards (id, roughness, metalness, real-world size). The game
+loads 1536px WebP (~2.4 MB total); the 2048px PNG masters are kept alongside them.
+
+## Assembly
+
+Assets are built primary form → secondary components → tertiary detail. Exposed
+edges are broken (a perfectly sharp 90° edge is a rendering artifact, not an object),
+trim is separate geometry so it casts its own shadow lines, and bolts, rivets, welds
+and seams go through `InstancedMesh`. See `kit.ts` for the vocabulary. Dimensions are
+real: containers are 6.06 × 2.44 × 2.59 m, doors 1.0 × 2.1 m, stair risers 0.2 m.
 
 ## Controls
 
 | Key | Action |
 |---|---|
 | WASD / Shift | Move / sprint |
+| Space / Ctrl | Jump / crouch |
 | Click | Fire (foot) · hydraulic punch (mech) |
 | E | Board vehicle (driver seat) / pilot mech / exit |
 | Q | Switch vehicle seat |
 | B, 1–6, R | Build mode, piece select, rotate 90° |
 | M | Mech Bay |
 | L | Game ↔ inspection layer |
+
+**On a phone or tablet:** drag the left half of the screen to move (push past the
+ring to sprint), drag the right half to look, and use the thumb-arc buttons for
+fire, jump, interact and build. Contextual buttons (rotate, seat, mech bay) appear
+only when they apply. The HUD scales down so it never covers the play area.
 
 ## Develop
 

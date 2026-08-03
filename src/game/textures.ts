@@ -4,11 +4,15 @@
 import * as THREE from "three";
 import { MATERIALS, type AtlasName, type MaterialCard, makeRng } from "./constants";
 
+// 1536px WebP (~2.4 MB total) rather than the 2048px PNG masters (~32 MB).
+// Cells tile at 2-6 m of world space, so the extra source resolution was never
+// visible — but 32 MB of blocking image load is fatal on a phone connection.
+// The PNG masters stay in public/textures/ as the archival source.
 const ATLAS_FILES: Record<AtlasName, string> = {
-  terrain: "./textures/atlas_terrain.png",
-  metal: "./textures/atlas_metal.png",
-  structure: "./textures/atlas_structure.png",
-  creature: "./textures/atlas_creature.png",
+  terrain: "./textures/atlas_terrain.webp",
+  metal: "./textures/atlas_metal.webp",
+  structure: "./textures/atlas_structure.webp",
+  creature: "./textures/atlas_creature.webp",
 };
 
 const images = new Map<AtlasName, HTMLImageElement>();
@@ -52,7 +56,15 @@ export async function loadAtlases(): Promise<void> {
 }
 
 export function cardTexture(card: MaterialCard, repeat = 1): THREE.Texture {
-  const canvas = cellCanvases.get(card.id)!;
+  const canvas = cellCanvases.get(card.id);
+  // Building a CanvasTexture from undefined silently yields a black texture, and
+  // the resulting object just looks unlit — a very expensive thing to debug.
+  // Fail loudly instead: it means something was constructed before loadAtlases().
+  if (!canvas) {
+    throw new Error(
+      `cardTexture("${card.id}"): atlas not sliced yet. Construct scene objects after awaiting loadAtlases().`
+    );
+  }
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;

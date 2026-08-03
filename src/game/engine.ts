@@ -1,12 +1,15 @@
 // RUSTFALL engine — scene, loop, input, combat, interactions, layer switching.
 import * as THREE from "three";
-import { makeRng } from "./constants";
+import { makeRng, QUALITY, IS_TOUCH } from "./constants";
 import { loadAtlases } from "./textures";
 import { buildWorld } from "./world";
 import { Robot, Shambler, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity } from "./entities";
-import { Player, FEEL } from "./player";
+import { Player, FEEL, type MoveInput } from "./player";
 import { BuildMode, PIECES } from "./build";
 import { InspectionLayer, type LayerMode } from "./inspection";
+import { Sky } from "./sky";
+import { Terrain, heightAt } from "./terrain";
+import { TouchControls, type TouchState } from "./touch";
 
 export interface HudState {
   hp: number;
@@ -37,7 +40,10 @@ export class Game {
   private renderer!: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera!: THREE.PerspectiveCamera;
-  private player = new Player();
+  // Built in init(), never as a field initializer: field initializers run inside
+  // `new Game()`, which is before init() awaits loadAtlases(). A Player built then
+  // slices its materials from an empty atlas cache and renders solid black.
+  private player!: Player;
   private colliders: THREE.Box3[] = [];
   private colliderMeshes: THREE.Object3D[] = [];
   private entities: Entity[] = [];
@@ -60,8 +66,15 @@ export class Game {
   private pops: Pop[] = [];
   private disposed = false;
   private canvas: HTMLCanvasElement;
+  private sky!: Sky;
+  private terrain!: Terrain;
+  private clock = new THREE.Clock();
+  private touch: TouchControls | null = null;
+  private actions = { fire: false, jump: false, crouch: false };
+  private attackCooldown = 0;
 
   onHud: (h: HudState) => void = () => {};
+  onTouch: (t: TouchState | null) => void = () => {};
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -69,47 +82,47 @@ export class Game {
 
   async init() {
     await loadAtlases();
+    this.player = new Player();
 
-    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer = new THREE.WebGLRenderer({
+      canvas: this.canvas,
+      antialias: !QUALITY.mobile,
+      powerPreference: "high-performance",
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY.maxPixelRatio));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.camera = new THREE.PerspectiveCamera(66, 1, 0.1, 600);
+    this.renderer.shadowMap.type = QUALITY.mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+    // Filmic response — without it the 3+ intensity sun clips every lit face to paper.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    this.camera = new THREE.PerspectiveCamera(FEEL.fov, 1, 0.1, 1400);
 
-    // ── Atmosphere: late amber wasteland light, dust haze ──
-    this.scene.fog = new THREE.Fog(0xb89a72, 55, 240);
-    this.scene.background = new THREE.Color(0xc7a87e);
-    const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(420, 24, 16),
-      new THREE.ShaderMaterial({
-        side: THREE.BackSide,
-        uniforms: { top: { value: new THREE.Color(0x7e94a6) }, bottom: { value: new THREE.Color(0xd9b98a) } },
-        vertexShader: "varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
-        fragmentShader: "uniform vec3 top; uniform vec3 bottom; varying vec3 vP; void main(){ float h=normalize(vP).y*0.5+0.5; gl_FragColor=vec4(mix(bottom,top,pow(h,0.8)),1.0); }",
-      })
-    );
-    this.scene.add(sky);
-    const sun = new THREE.DirectionalLight(0xffe0b3, 2.6);
-    sun.position.set(-60, 80, 40);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -80; sun.shadow.camera.right = 80;
-    sun.shadow.camera.top = 80; sun.shadow.camera.bottom = -80;
-    sun.shadow.camera.far = 260;
-    this.scene.add(sun);
-    this.scene.add(new THREE.HemisphereLight(0xc8d4e0, 0x8a6f4d, 0.85));
+    // ── Atmosphere: low amber sun, dust haze, viewer-tracked shadow rig ──
+    this.sky = new Sky(this.scene, {
+      shadowRadius: QUALITY.shadowRadius,
+      shadowMapSize: QUALITY.shadowMapSize,
+    });
 
     // ── World ──
+    this.terrain = new Terrain(QUALITY.mobile ? 140 : 220);
+    this.scene.add(this.terrain.mesh);
     buildWorld({ scene: this.scene, colliders: this.colliders });
     this.scene.add(this.player.group);
-    this.colliderMeshes = this.scene.children.filter((o) => o instanceof THREE.Mesh);
+    // Every mesh in the scene, not just top-level ones — the old filter missed
+    // everything nested in a Group, so the camera clipped through most of the world.
+    this.colliderMeshes = [];
+    this.scene.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && o !== this.terrain.mesh) this.colliderMeshes.push(o);
+    });
 
     // ── Population: robots, shamblers, helpers, boss, vehicles, mech ──
     const rng = makeRng(4242);
     const spawn = (rMin: number, rMax: number) => {
       const a = rng() * Math.PI * 2;
       const r = rMin + rng() * (rMax - rMin);
-      return new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      return new THREE.Vector3(x, heightAt(x, z), z);
     };
     for (let i = 0; i < 4; i++) {
       const r = new Robot(spawn(18, 70), true); // mean ones roam deep
@@ -137,17 +150,25 @@ export class Game {
       new Helper(new THREE.Vector3(bx - 8, 0, bz - 6), "GUARD", [new THREE.Vector3(bx - 8, 0, bz - 8), new THREE.Vector3(bx + 8, 0, bz), new THREE.Vector3(bx + 6, 0, bz + 6)], "ROOK")
     );
     for (const h of this.helpers) this.scene.add(h.group);
-    this.boss = new Boss(new THREE.Vector3(62, 0, 62));
+    this.boss = new Boss(new THREE.Vector3(62, heightAt(62, 62), 62));
     this.scene.add(this.boss.group);
     this.entities.push(this.boss);
-    this.vehicles.push(new Buggy(new THREE.Vector3(16, 0, -36)));
-    this.vehicles.push(new Truck(new THREE.Vector3(-18, 0, -52)));
+    this.vehicles.push(new Buggy(new THREE.Vector3(16, heightAt(16, -36), -36)));
+    this.vehicles.push(new Truck(new THREE.Vector3(-18, heightAt(-18, -52), -52)));
     for (const v of this.vehicles) this.scene.add(v.group);
-    this.mech = new Mech(new THREE.Vector3(-14, 0, -40));
+    this.mech = new Mech(new THREE.Vector3(-14, heightAt(-14, -40), -40));
     this.scene.add(this.mech.group);
 
     this.buildMode = new BuildMode(this.scene, this.colliders);
     this.inspection = new InspectionLayer(this.scene);
+
+    // Dev-only handle for the screenshot/inspection harness.
+    if (import.meta.env.DEV) {
+      (window as unknown as { __rustfall?: unknown }).__rustfall = {
+        scene: this.scene, renderer: this.renderer, camera: this.camera,
+        player: this.player, game: this, colliders: this.colliders,
+      };
+    }
 
     this.bindInput();
     this.resize();
@@ -160,7 +181,7 @@ export class Game {
     if (e.repeat) return;
     this.keys.add(e.code);
     if (e.code === "KeyL") this.setLayer(this.inspection.mode === "game" ? "inspection" : "game");
-    if (e.code === "KeyB") { this.buildMode.active ? this.buildMode.exit() : this.buildMode.enter(); }
+    if (e.code === "KeyB") this.toggleBuild();
     if (e.code === "KeyR" && this.buildMode.active) this.buildMode.rotate();
     if (e.code === "KeyE") this.interact();
     if (e.code === "KeyQ" && this.mode === "VEHICLE" && this.currentVehicle) this.currentVehicle.cycleSeat();
@@ -173,17 +194,28 @@ export class Game {
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
   private onMouseMove = (e: MouseEvent) => {
     if (document.pointerLockElement !== this.canvas) return;
-    this.player.camYaw -= e.movementX * FEEL.lookSens;
-    this.player.camPitch = THREE.MathUtils.clamp(
-      this.player.camPitch + e.movementY * FEEL.lookSens, FEEL.pitchMin, FEEL.pitchMax
-    );
+    this.look(e.movementX, e.movementY, FEEL.lookSens);
   };
   private onMouseDown = (e: MouseEvent) => {
-    if (document.pointerLockElement !== this.canvas) {
+    if (e.button !== 0) return;
+    if (!IS_TOUCH && document.pointerLockElement !== this.canvas) {
       this.canvas.requestPointerLock();
       return;
     }
-    if (e.button !== 0) return;
+    this.primary();
+  };
+  private onPointerCancel = () => { this.keys.clear(); this.actions.fire = false; };
+  private onBlur = () => { this.keys.clear(); this.actions.fire = false; };
+
+  private look(dx: number, dy: number, sens: number) {
+    this.player.camYaw -= dx * sens;
+    this.player.camPitch = THREE.MathUtils.clamp(
+      this.player.camPitch + dy * sens, FEEL.pitchMin, FEEL.pitchMax
+    );
+  }
+
+  /** Left click / fire button: place a piece in build mode, otherwise shoot. */
+  private primary() {
     if (this.buildMode.active) {
       const res = this.buildMode.place();
       if (res) {
@@ -194,9 +226,7 @@ export class Game {
       return;
     }
     this.attack();
-  };
-  private onPointerCancel = () => this.keys.clear(); // movement must not survive input termination
-  private onBlur = () => this.keys.clear();
+  }
 
   private bindInput() {
     window.addEventListener("keydown", this.onKeyDown);
@@ -205,7 +235,24 @@ export class Game {
     window.addEventListener("mousedown", this.onMouseDown);
     window.addEventListener("pointercancel", this.onPointerCancel);
     window.addEventListener("blur", this.onBlur);
+    if (IS_TOUCH) {
+      this.touch = new TouchControls(this.canvas);
+      this.touch.onChange = () => this.onTouch(this.touch!.state);
+    }
   }
+
+  // ── Public control surface for the on-screen (touch) buttons ──
+  setAction(name: "fire" | "jump" | "crouch", down: boolean) {
+    if (name === "fire" && down) this.primary();
+    this.actions[name] = down;
+  }
+
+  pressInteract() { this.interact(); }
+  toggleBuild() { if (this.buildMode.active) this.buildMode.exit(); else this.buildMode.enter(); }
+  rotatePiece() { if (this.buildMode.active) this.buildMode.rotate(); }
+  selectPiece(i: number) { if (this.buildMode.active) this.buildMode.select(i); }
+  cycleSeat() { if (this.mode === "VEHICLE" && this.currentVehicle) this.currentVehicle.cycleSeat(); }
+  toggleMechBay() { if (this.mode === "MECH") this.mechBayOpen = !this.mechBayOpen; }
 
   private resize = () => {
     const w = this.canvas.clientWidth || window.innerWidth;
@@ -260,6 +307,10 @@ export class Game {
 
   // ── Combat: pulse shot on foot, hydraulic punch in the mech ──
   private attack() {
+    // Rate limit: without it a click-spam or a held fire button fires every frame,
+    // which scales damage with refresh rate.
+    if (this.attackCooldown > 0) return;
+    this.attackCooldown = this.mode === "MECH" ? 0.62 : 0.17;
     const origin = this.mode === "MECH" ? this.mech.group.position.clone().add(new THREE.Vector3(0, 3, 0)) : this.camera.position.clone();
     const dir = this.mode === "MECH"
       ? new THREE.Vector3(Math.sin(this.player.camYaw), 0, Math.cos(this.player.camYaw))
@@ -302,14 +353,40 @@ export class Game {
 
   private tick = () => {
     if (this.disposed) return;
-    const dt = Math.min(0.05, 1 / 60);
+    // Real elapsed time, clamped so a tab-switch stall can't teleport anyone
+    // through a wall. The old fixed 1/60 made the whole game run at 2.4x on a
+    // 144 Hz display.
+    const dt = Math.min(0.05, this.clock.getDelta());
     const k = this.keys;
-    const ix = (k.has("KeyD") ? 1 : 0) - (k.has("KeyA") ? 1 : 0);
-    const iy = (k.has("KeyW") ? 1 : 0) - (k.has("KeyS") ? 1 : 0);
-    const sprint = k.has("ShiftLeft") || k.has("ShiftRight");
+
+    // Keyboard and touch are summed, so either works and neither is special-cased.
+    const t = this.touch?.state;
+    let ix = (k.has("KeyD") ? 1 : 0) - (k.has("KeyA") ? 1 : 0);
+    let iy = (k.has("KeyW") ? 1 : 0) - (k.has("KeyS") ? 1 : 0);
+    let sprint = k.has("ShiftLeft") || k.has("ShiftRight");
+    if (t) {
+      ix += t.moveX;
+      iy += t.moveY;
+      sprint = sprint || t.sprint;
+    }
+    if (this.touch) {
+      const look = this.touch.consumeLook();
+      if (look.dx || look.dy) this.look(look.dx, look.dy, FEEL.touchLookSens);
+    }
+    const input: MoveInput = {
+      x: THREE.MathUtils.clamp(ix, -1, 1),
+      y: THREE.MathUtils.clamp(iy, -1, 1),
+      sprint,
+      crouch: k.has("ControlLeft") || k.has("KeyC") || this.actions.crouch,
+      jump: k.has("Space") || this.actions.jump,
+    };
+    this.actions.jump = false; // edge-triggered: one press, one jump
+
+    this.attackCooldown = Math.max(0, this.attackCooldown - dt);
+    if (this.actions.fire && this.mode !== "FOOT") this.attack();
 
     if (this.mode === "FOOT") {
-      this.player.move(dt, ix, iy, sprint, this.colliders);
+      this.player.move(dt, input, this.colliders);
     } else if (this.mode === "VEHICLE" && this.currentVehicle) {
       const v = this.currentVehicle;
       if (v.isDriving) v.drive(dt, iy, -ix); // only the DRIVER seat has the wheel
@@ -318,14 +395,17 @@ export class Game {
       const stats = this.mech.stats;
       const fwd = new THREE.Vector3(Math.sin(this.player.camYaw), 0, Math.cos(this.player.camYaw));
       const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), fwd);
-      const d = new THREE.Vector3().addScaledVector(fwd, iy).addScaledVector(right, ix);
+      const d = new THREE.Vector3().addScaledVector(fwd, input.y).addScaledVector(right, input.x);
+      const mp = this.mech.group.position;
       if (d.lengthSq() > 0.01) {
         d.normalize();
         this.mech.group.rotation.y = Math.atan2(d.x, d.z);
-        this.mech.group.position.addScaledVector(d, stats.speed * dt);
-        this.mech.group.position.y = Math.abs(Math.sin(performance.now() * 0.006)) * 0.18;
+        mp.addScaledVector(d, stats.speed * dt);
+        this.mech.stride += stats.speed * dt;
       }
-      this.player.position.copy(this.mech.group.position);
+      // the gait bob rides on top of the terrain, not instead of it
+      mp.y = heightAt(mp.x, mp.z) + Math.abs(Math.sin(this.mech.stride * 1.9)) * 0.18;
+      this.player.position.copy(mp);
     }
 
     // entities think, work, and hunt; contact hurts
@@ -339,7 +419,8 @@ export class Game {
     for (const h of this.helpers) h.update(dt);
     if (this.player.hp <= 0) { // wasteland triage: wake up at base
       this.player.hp = this.player.maxHp;
-      this.player.position.set(-6, 0, -38);
+      this.player.position.set(-6, heightAt(-6, -38), -38);
+      this.player.velocity.set(0, 0, 0);
     }
 
     // build ghost follows aim
@@ -377,8 +458,11 @@ export class Game {
     if (this.mode === "VEHICLE" && this.currentVehicle) anchor = this.currentVehicle.seatWorld(this.currentVehicle.seatIdx);
     else if (this.mode === "MECH") anchor = this.mech.group.position;
     else anchor = this.player.position;
-    this.player.updateCameraRig(this.camera, this.colliderMeshes, anchor, this.mode);
+    const speed01 = this.mode === "FOOT" ? this.player.gait / FEEL.run : 0;
+    this.player.updateCameraRig(this.camera, this.colliderMeshes, anchor, this.mode, dt, speed01);
 
+    this.sky.update(anchor);
+    this.sky.follow(this.camera.position);
     this.inspection.update(anchor);
     this.renderer.render(this.scene, this.camera);
 
@@ -422,6 +506,7 @@ export class Game {
     window.removeEventListener("mousedown", this.onMouseDown);
     window.removeEventListener("pointercancel", this.onPointerCancel);
     window.removeEventListener("blur", this.onBlur);
+    this.touch?.dispose();
     document.exitPointerLock?.();
     this.renderer.dispose();
   }

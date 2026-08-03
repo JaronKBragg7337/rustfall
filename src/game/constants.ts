@@ -10,6 +10,23 @@ export const WORLD = {
   CELLS: 50, // SIZE / MODULE
 } as const;
 
+// Device tier. Phones get a smaller shadow frustum, fewer texels, and a hard
+// pixel-ratio cap — a 3x-DPR phone rendering at native res is ~9x the fill rate
+// of a laptop for no visible gain at that screen size.
+const COARSE_POINTER = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+const NARROW = typeof window !== "undefined" && Math.min(window.innerWidth, window.innerHeight) < 820;
+export const IS_TOUCH = COARSE_POINTER || (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
+export const IS_MOBILE = IS_TOUCH && NARROW;
+
+export const QUALITY = {
+  mobile: IS_MOBILE,
+  maxPixelRatio: IS_MOBILE ? 2 : 1.75,
+  shadowMapSize: IS_MOBILE ? 1024 : 2048,
+  shadowRadius: IS_MOBILE ? 34 : 45,
+  shamblers: IS_MOBILE ? 5 : 8,
+  props: IS_MOBILE ? 34 : 64,
+} as const;
+
 // Deterministic RNG — seeded LCG so the whole wasteland is reproducible.
 export function makeRng(seed = 9137) {
   let s = seed >>> 0;
@@ -27,6 +44,7 @@ export function gridAddress(x: number, z: number, level = 0): string {
 }
 
 export type AtlasName = "terrain" | "metal" | "structure" | "creature";
+export type MaterialKey = keyof typeof MATERIALS;
 
 export interface MaterialCard {
   id: string;
