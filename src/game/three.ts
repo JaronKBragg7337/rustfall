@@ -34,6 +34,7 @@ export { BoxGeometry } from "three/src/geometries/BoxGeometry.js";
 export { CylinderGeometry } from "three/src/geometries/CylinderGeometry.js";
 export { PlaneGeometry } from "three/src/geometries/PlaneGeometry.js";
 export { RingGeometry } from "three/src/geometries/RingGeometry.js";
+export { OctahedronGeometry } from "three/src/geometries/OctahedronGeometry.js";
 export { SphereGeometry } from "three/src/geometries/SphereGeometry.js";
 export { TorusGeometry } from "three/src/geometries/TorusGeometry.js";
 

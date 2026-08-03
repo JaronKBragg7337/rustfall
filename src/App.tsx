@@ -12,8 +12,8 @@ const INITIAL_HUD: HudState = {
   hp: 100, bossHp: null, mode: "FOOT", layer: "game", building: false,
   buildPiece: "", buildLegal: false, buildSnapped: false, buildReason: "", interact: null,
   kills: 0, scrap: 0, vehicleName: null, seatName: null, mechParts: null, mechStats: null,
-  mechBayOpen: false, issues: 0, address: "0, 0, 0",
-  firstPerson: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
+  mechBayOpen: false, issues: 0, address: "0, 0, 0", toast: "", lootLeft: 0,
+  firstPerson: false, devMode: false, safe: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
 };
 
 /**
@@ -151,8 +151,15 @@ export default function App() {
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-300">{hud.mode}</Badge>
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-300">☠ {hud.kills}</Badge>
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-amber-700 text-amber-300">⛏ {hud.scrap}</Badge>
+          <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-400">◆ {hud.lootLeft}</Badge>
           {hud.layer === "inspection" && (
             <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-cyan-400 text-cyan-300">◈ INSPECT</Badge>
+          )}
+          {hud.devMode && (
+            <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-fuchsia-400 text-fuchsia-300">⚑ DEV · INVULNERABLE</Badge>
+          )}
+          {hud.safe && (
+            <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-emerald-400 text-emerald-300">✚ SAFE ZONE</Badge>
           )}
         </div>
         {hud.vehicleName && (
@@ -220,6 +227,15 @@ export default function App() {
                 {!hud.firstPerson ? "● THIRD PERSON" : "THIRD PERSON"}
               </button>
             </div>
+            <button onPointerDown={() => g()?.toggleDevMode()}
+              className={`mt-1.5 w-full py-1.5 rounded border text-[10px] tracking-widest ${
+                hud.devMode ? "border-fuchsia-400 text-fuchsia-200 bg-fuchsia-500/15" : "border-zinc-700 text-zinc-400"}`}>
+              {hud.devMode ? "⚑ DEV MODE ON" : "DEV MODE (INVULNERABLE)"}
+            </button>
+            <div className="text-[9px] text-zinc-500 mt-1 leading-snug">
+              Turns on automatically in the inspection layer so bug-hunting can't get you killed.
+            </div>
+
             <button
               onPointerDown={() => { g()?.toggleCinematic(); setSettingsOpen(false); }}
               className="mt-2 w-full py-2 rounded border border-fuchsia-600/70 bg-fuchsia-500/10 text-fuchsia-200
@@ -251,6 +267,14 @@ export default function App() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── pickup / action confirmation ── */}
+      {hud.toast && !hud.cinematic && (
+        <div className="absolute bottom-40 sm:bottom-48 left-1/2 -translate-x-1/2 z-20 rounded border border-amber-400/70
+                        bg-zinc-950/90 px-3 py-1.5 text-amber-200 text-[11px] sm:text-sm tracking-[0.2em] whitespace-nowrap">
+          {hud.toast}
         </div>
       )}
 

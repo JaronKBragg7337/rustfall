@@ -7,7 +7,7 @@
 // Moving bodies use object-space surface projection so their materials don't
 // swim across the geometry as they drive around.
 import * as THREE from "./three";
-import { WORLD, makeRng, registerAsset, MATERIALS } from "./constants";
+import { WORLD, makeRng, registerAsset, MATERIALS, SAFE_ZONE, safeZoneFactor } from "./constants";
 import { surface, plain } from "./surface";
 import { bev, part, flatBox, cyl, bolts, rivets, along, perimeter, seam, weld, vent, bevelBox } from "./kit";
 import { Humanoid, STYLES } from "./figures";
@@ -28,6 +28,21 @@ function clampToWorld(v: THREE.Vector3) {
   const L = WORLD.SIZE / 2 - 3;
   v.x = THREE.MathUtils.clamp(v.x, -L, L);
   v.z = THREE.MathUtils.clamp(v.z, -L, L);
+}
+
+/**
+ * Push a hostile back out of the home base. Applied after movement rather than
+ * as a pathing constraint: it is one line, it cannot fail to hold, and the
+ * feather band means they slide along the perimeter instead of jittering on it.
+ */
+function keepOutOfSafeZone(v: THREE.Vector3) {
+  const f = safeZoneFactor(v.x, v.z);
+  if (f <= 0) return;
+  const dx = v.x - SAFE_ZONE.x;
+  const dz = v.z - SAFE_ZONE.z;
+  const d = Math.hypot(dx, dz) || 1e-4;
+  v.x = SAFE_ZONE.x + (dx / d) * SAFE_ZONE.radius;
+  v.z = SAFE_ZONE.z + (dz / d) * SAFE_ZONE.radius;
 }
 
 // Shared shop materials — object-space projected so they ride with the body.
@@ -299,6 +314,7 @@ export class Robot implements Entity {
       }
     }
 
+    if (this.hostile) keepOutOfSafeZone(p);
     // road wheels turn with distance covered, not wall-clock time
     for (const w of this.wheels) w.rotation.y = -this.travelled * 5.4;
     // sensor head scans when idle
@@ -357,6 +373,7 @@ export class Shambler implements Entity {
     }
     this.body.shamble(dt, this.moving);
     clampToWorld(p);
+    keepOutOfSafeZone(p);
     p.y = heightAt(p.x, p.z);
   }
 
@@ -602,6 +619,7 @@ export class Boss implements Entity {
 
     (this.core.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.3 + Math.sin(this.phase * 3) * 0.6;
     clampToWorld(p);
+    keepOutOfSafeZone(p);
   }
 
   damage(n: number) {

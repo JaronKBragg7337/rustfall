@@ -1,6 +1,6 @@
 // RUSTFALL engine — scene, loop, input, combat, interactions, layer switching.
 import * as THREE from "./three";
-import { makeRng, QUALITY, IS_TOUCH } from "./constants";
+import { makeRng, QUALITY, IS_TOUCH, safeZoneFactor, assetRegistry } from "./constants";
 import { loadAtlases } from "./textures";
 import { buildWorld } from "./world";
 import { Robot, Shambler, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity } from "./entities";
@@ -11,6 +11,7 @@ import { Sky } from "./sky";
 import { Terrain, heightAt } from "./terrain";
 import { TouchControls, type TouchState } from "./touch";
 import { Cinematic } from "./cinematic";
+import { LootField, LOOTABLE } from "./loot";
 
 export interface HudState {
   hp: number;
@@ -32,7 +33,11 @@ export interface HudState {
   mechBayOpen: boolean;
   issues: number;
   address: string;
+  toast: string;
+  lootLeft: number;
   firstPerson: boolean;
+  devMode: boolean;
+  safe: boolean;
   cinematic: boolean;
   shotName: string;
   shotCaption: string;
@@ -52,6 +57,7 @@ export class Game {
   private player!: Player;
   private colliders: THREE.Box3[] = [];
   private colliderMeshes: THREE.Object3D[] = [];
+  private occluders: THREE.Object3D[] = [];
   private entities: Entity[] = [];
   private helpers: Helper[] = [];
   private boss!: Boss;
@@ -79,7 +85,13 @@ export class Game {
   private actions = { fire: false, jump: false, crouch: false };
   private attackCooldown = 0;
   private firstPerson = false;
+  private devMode = false;
+  private devManual = false;
+  private inSafeZone = false;
   private cinema = new Cinematic();
+  private loot!: LootField;
+  private toast = "";
+  private toastTtl = 0;
 
   onHud: (h: HudState) => void = () => {};
   onTouch: (t: TouchState | null) => void = () => {};
@@ -115,6 +127,30 @@ export class Game {
     this.terrain = new Terrain(QUALITY.mobile ? 140 : 220);
     this.scene.add(this.terrain.mesh);
     buildWorld({ scene: this.scene, colliders: this.colliders });
+
+    // Static world geometry, captured BEFORE the player and any actors exist, so
+    // line-of-sight tests are not blocked by the shooter or the target themselves.
+    this.occluders = [];
+    this.scene.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && o !== this.terrain.mesh) this.occluders.push(o);
+    });
+    this.occluders.push(this.terrain.mesh); // a hill is cover too
+
+    // ── Loot: promote scenery the registry already knows about ──
+    this.loot = new LootField(this.scene);
+    {
+      const lootRng = makeRng(7717);
+      for (const rec of assetRegistry) {
+        const spec = LOOTABLE[rec.role];
+        if (!spec) continue;
+        const b = new THREE.Box3().setFromObject(rec.object);
+        if (b.isEmpty()) continue;
+        const c = b.getCenter(new THREE.Vector3());
+        const amount = Math.round(spec.min + lootRng() * (spec.max - spec.min));
+        this.loot.add(new THREE.Vector3(c.x, b.max.y, c.z), spec.label, amount);
+      }
+    }
+
     this.scene.add(this.player.group);
     // Every mesh in the scene, not just top-level ones — the old filter missed
     // everything nested in a Group, so the camera clipped through most of the world.
@@ -135,8 +171,11 @@ export class Game {
     for (let i = 0; i < 4; i++) {
       const r = new Robot(spawn(18, 70), true); // mean ones roam deep
       r.onFire = (from, to) => {
-        this.spawnTracer(from, to, 0xff4422);
-        this.player.hp = Math.max(0, this.player.hp - 4); // zap bolt hits home
+        // Cover has to actually work. Without this the bolt ignored geometry and
+        // hit you through walls, so hiding indoors did nothing.
+        const clear = this.lineOfSight(from, to);
+        this.spawnTracer(from, clear.point, clear.hit ? 0x996655 : 0xff4422);
+        if (!clear.hit) this.damagePlayer(4);
       };
       this.entities.push(r);
     }
@@ -191,6 +230,7 @@ export class Game {
     this.keys.add(e.code);
     if (e.code === "KeyL") this.setLayer(this.inspection.mode === "game" ? "inspection" : "game");
     if (e.code === "KeyV") this.toggleFirstPerson();
+    if (e.code === "KeyG") this.toggleDevMode();
     if (e.code === "KeyP") this.toggleCinematic();
     if (e.code === "Escape" && this.cinema.active) this.toggleCinematic();
     if (e.code === "KeyB") this.toggleBuild();
@@ -259,7 +299,19 @@ export class Game {
     this.actions[name] = down;
   }
 
+  /** Brief on-screen confirmation, so an action never happens silently. */
+  private say(msg: string, seconds = 2.2) {
+    this.toast = msg;
+    this.toastTtl = seconds;
+  }
+
   pressInteract() { this.interact(); }
+
+  /** Manual dev-mode latch, independent of the inspection layer. */
+  toggleDevMode() {
+    this.devManual = !this.devManual;
+    this.devMode = this.devManual || this.inspection.mode === "inspection";
+  }
 
   toggleFirstPerson() {
     this.firstPerson = !this.firstPerson;
@@ -299,6 +351,14 @@ export class Game {
   private interact() {
     const p = this.player.position;
     if (this.mode === "FOOT") {
+      const node = this.loot.nearest(p);
+      if (node) {
+        const got = this.loot.take(node);
+        this.scrap += got;
+        this.say(`+${got} SCRAP · ${node.label}`);
+        this.spawnRing(new THREE.Vector3(node.pos.x, node.pos.y + 0.1, node.pos.z), 0xffc455);
+        return;
+      }
       let nearest: Vehicle | null = null;
       let nd = 4.5;
       for (const v of this.vehicles) {
@@ -335,10 +395,36 @@ export class Game {
 
   setLayer(mode: LayerMode) {
     this.inspection.setMode(mode);
+    // Inspecting means standing still reading labels, which is exactly when a
+    // shambler kills you. Dev mode rides along with the layer automatically.
+    this.devMode = this.devManual || mode === "inspection";
     if (mode === "inspection") this.lastIssueCount = this.inspection.validate().issues.length;
   }
 
   // ── Combat: pulse shot on foot, hydraulic punch in the mech ──
+  /**
+   * Is the straight line from `a` to `b` clear of static world geometry?
+   * Returns the impact point so a blocked shot can still draw a tracer that
+   * stops at the wall — a bolt that visibly splashes on cover teaches the
+   * player that cover works far better than one that simply misses.
+   */
+  private lineOfSight(a: THREE.Vector3, b: THREE.Vector3): { hit: boolean; point: THREE.Vector3 } {
+    const dir = new THREE.Vector3().subVectors(b, a);
+    const dist = dir.length();
+    if (dist < 1e-4) return { hit: false, point: b.clone() };
+    dir.divideScalar(dist);
+    const ray = new THREE.Raycaster(a, dir, 0.1, dist - 0.15);
+    const hits = ray.intersectObjects(this.occluders, false);
+    if (hits.length === 0) return { hit: false, point: b.clone() };
+    return { hit: true, point: hits[0].point.clone() };
+  }
+
+  /** Single funnel for incoming damage, so dev mode and the safe zone hold everywhere. */
+  private damagePlayer(amount: number) {
+    if (this.devMode) return;
+    this.player.hp = Math.max(0, this.player.hp - amount);
+  }
+
   private attack() {
     // Rate limit: without it a click-spam or a held fire button fires every frame,
     // which scales damage with refresh rate.
@@ -360,7 +446,11 @@ export class Game {
     this.spawnTracer(origin, end, this.mode === "MECH" ? 0xffaa33 : 0x9fe8ff);
     if (best) {
       best.e.damage(dmg);
-      if (best.e.dead) this.kills += 1;
+      if (best.e.dead) {
+        this.kills += 1;
+        // A kill should leave something behind, or fighting is pure cost.
+        this.loot.addDrop(best.e.group.position, 5 + Math.floor(Math.random() * 9));
+      }
     }
   }
 
@@ -449,10 +539,21 @@ export class Game {
     for (const e of this.entities) {
       e.update(dt, pp);
       if (!e.dead && e.hostile && e.group.position.distanceTo(pp) < e.radius + 0.6) {
-        this.player.hp = Math.max(0, this.player.hp - dt * (e instanceof Boss ? 30 : 8));
+        this.damagePlayer(dt * (e instanceof Boss ? 30 : 8));
       }
     }
     for (const h of this.helpers) h.update(dt);
+    this.loot.update(dt, pp);
+    if (this.toastTtl > 0) {
+      this.toastTtl -= dt;
+      if (this.toastTtl <= 0) this.toast = "";
+    }
+    // Sanctuary: the compound patches you up, slowly enough that it is a place to
+    // retreat to rather than a reason never to leave.
+    this.inSafeZone = safeZoneFactor(pp.x, pp.z) > 0;
+    if (this.inSafeZone && this.player.hp < this.player.maxHp) {
+      this.player.hp = Math.min(this.player.maxHp, this.player.hp + dt * 6);
+    }
     if (this.player.hp <= 0) { // wasteland triage: wake up at base
       this.player.hp = this.player.maxHp;
       this.player.position.set(-6, heightAt(-6, -38), -38);
@@ -525,7 +626,13 @@ export class Game {
       building: this.buildMode.active,
       buildPiece: this.buildMode.piece.label,
       buildLegal, buildSnapped, buildReason,
-      interact: this.mode !== "FOOT" ? "EXIT" : nearestV ? `BOARD ${nearestV.name}` : nearMech ? "PILOT MECH" : null,
+      interact: this.mode !== "FOOT"
+        ? "EXIT"
+        : (() => {
+            const n = this.loot.nearest(pp);
+            if (n) return `SEARCH ${n.label}`;
+            return nearestV ? `BOARD ${nearestV.name}` : nearMech ? "PILOT MECH" : null;
+          })(),
       kills: this.kills,
       scrap: this.scrap,
       vehicleName: this.mode === "VEHICLE" && this.currentVehicle ? this.currentVehicle.name : null,
@@ -534,8 +641,12 @@ export class Game {
       mechStats: this.mode === "MECH" ? this.mech.stats : null,
       mechBayOpen: this.mechBayOpen,
       issues: this.lastIssueCount,
+      toast: this.toast,
+      lootLeft: this.loot.remaining,
       address: `${anchor.x.toFixed(1)}, ${anchor.y.toFixed(1)}, ${anchor.z.toFixed(1)}`,
       firstPerson: this.firstPerson,
+      devMode: this.devMode,
+      safe: this.inSafeZone,
       cinematic: this.cinema.active,
       shotName: this.cinema.active ? this.cinema.shot.name : "",
       shotCaption: this.cinema.active ? this.cinema.shot.caption : "",

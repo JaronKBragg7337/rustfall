@@ -27,6 +27,18 @@ export const QUALITY = {
   props: IS_MOBILE ? 34 : 64,
 } as const;
 
+// The home base is a sanctuary: hostiles will not path inside it and the player
+// recovers there. `feather` is the band over which the repulsion ramps up, so
+// robots veer away from the perimeter instead of pinballing off an invisible wall.
+export const SAFE_ZONE = { x: -6, z: -44, radius: 18, feather: 5 } as const;
+
+/** 0 outside the zone, ramping to 1 well inside it. */
+export function safeZoneFactor(x: number, z: number): number {
+  const d = Math.hypot(x - SAFE_ZONE.x, z - SAFE_ZONE.z);
+  if (d >= SAFE_ZONE.radius) return 0;
+  return Math.min(1, (SAFE_ZONE.radius - d) / SAFE_ZONE.feather);
+}
+
 // Deterministic RNG — seeded LCG so the whole wasteland is reproducible.
 export function makeRng(seed = 9137) {
   let s = seed >>> 0;
