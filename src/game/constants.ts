@@ -1,13 +1,13 @@
 // RUSTFALL — world constants & material cards
 // Conventions: 1 unit = 1 meter, right-handed, +Y up, forward +Z, right +X.
 export const WORLD = {
-  SIZE: 200, // meters, square
+  SIZE: 400, // meters, square — the inner 200 m is the inhabited core
   MODULE: 4.0, // structural module
   WALL_H: 3.0, // wall height
   THICK: 0.2, // wall/floor thickness
   SNAP: 1.0, // general snap
   SNAP_TRIM: 0.5,
-  CELLS: 50, // SIZE / MODULE
+  CELLS: 100, // SIZE / MODULE
 } as const;
 
 // Device tier. Phones get a smaller shadow frustum, fewer texels, and a hard
@@ -24,7 +24,9 @@ export const QUALITY = {
   shadowMapSize: IS_MOBILE ? 1024 : 2048,
   shadowRadius: IS_MOBILE ? 34 : 45,
   shamblers: IS_MOBILE ? 5 : 8,
-  props: IS_MOBILE ? 34 : 64,
+  // Doubled ground area gets ~50% more props, not 2x: the new outer ring is
+  // deliberately sparse wasteland, not a second inhabited core.
+  props: IS_MOBILE ? 48 : 96,
 } as const;
 
 // ── Quality presets (Batch 3, item 17) ──
@@ -50,11 +52,11 @@ export interface QualitySettings {
 export function qualitySettings(p: QualityPreset): QualitySettings {
   switch (p) {
     case "HIGH":
-      return { maxPixelRatio: 2, shadowMapSize: 2048, shadowRadius: 45, shamblers: 8, props: 64, fuelCans: 8 };
+      return { maxPixelRatio: 2, shadowMapSize: 2048, shadowRadius: 45, shamblers: 8, props: 96, fuelCans: 8 };
     case "BALANCED":
-      return { maxPixelRatio: 1.5, shadowMapSize: 1024, shadowRadius: 40, shamblers: 6, props: 48, fuelCans: 6 };
+      return { maxPixelRatio: 1.5, shadowMapSize: 1024, shadowRadius: 40, shamblers: 6, props: 64, fuelCans: 6 };
     case "BATTERY":
-      return { maxPixelRatio: 1, shadowMapSize: 512, shadowRadius: 34, shamblers: 4, props: 28, fuelCans: 5 };
+      return { maxPixelRatio: 1, shadowMapSize: 512, shadowRadius: 34, shamblers: 4, props: 36, fuelCans: 5 };
     default:
       return {
         maxPixelRatio: QUALITY.maxPixelRatio,

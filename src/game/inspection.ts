@@ -26,7 +26,7 @@ export class InspectionLayer {
     // above the surface, so it stays visible over the whole map.
     this.group.add(this.buildTerrainGrid());
     // world origin cross
-    const origin = makeTag("ORIGIN · L0-H25-R25", "#58d6ff", 1.2, true);
+    const origin = makeTag(`ORIGIN · ${gridAddress(0, 0)}`, "#58d6ff", 1.2, true);
     origin.position.set(0, heightAt(0, 0) + 1.2, 0);
     this.group.add(origin);
     this.group.visible = false;
@@ -40,6 +40,11 @@ export class InspectionLayer {
     const step = WORLD.MODULE;
     const sub = 2;          // sample every 2 m so lines follow the slope
     const lift = 0.18;      // clearance above the surface
+    // 400 m map: full 4 m module density stays inside the inhabited core
+    // (|t| <= 100). Beyond it every 2nd minor line is dropped (major lines
+    // always drawn), so the overlay covers the whole extent without doubling
+    // its vertex count for ground nobody builds on.
+    const core = 100;
     const pts: number[] = [];
     const cols: number[] = [];
     const major = new THREE.Color(0x58d6ff);
@@ -53,7 +58,9 @@ export class InspectionLayer {
     for (let i = 0; i <= WORLD.CELLS; i++) {
       const t = -half + i * step;
       // every 5th line is a major axis, so the grid stays readable at distance
-      const c = i % 5 === 0 ? major : minor;
+      const isMajor = i % 5 === 0;
+      if (Math.abs(t) > core && !isMajor && i % 2 !== 0) continue; // thinned ring
+      const c = isMajor ? major : minor;
       for (let s = -half; s < half; s += sub) {
         push(t, s, c); push(t, s + sub, c);   // line along Z
         push(s, t, c); push(s + sub, t, c);   // line along X

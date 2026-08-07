@@ -18,6 +18,7 @@ import { heightAt, normalAt } from "./terrain";
 import { buildIndustrial } from "./site_industrial";
 import { buildWash } from "./site_wash";
 import { buildBaseUpgrades } from "./site_base";
+import { buildOuter } from "./site_outer";
 
 export interface WorldRefs {
   scene: THREE.Scene;
@@ -602,6 +603,11 @@ export function buildWorld(refs: WorldRefs): void {
   // Own RNG stream (30911); sites were probe-checked against every asset
   // footprint before the wash line was committed.
   buildWash(refs);
+
+  // ── OUTER RING SITES (map expansion 200→400 m — see site_outer.ts) ─────
+  // Crashed cargo plane, ruined suburb, military checkpoint, junkyard.
+  // Own RNG stream (77031); all sites probe-checked against the wash carve.
+  buildOuter(refs);
 }
 
 // ─────────────────────────── the Homestead ───────────────────────────

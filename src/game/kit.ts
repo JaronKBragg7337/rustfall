@@ -284,3 +284,38 @@ export function window(
   if (opts.rot) g.rotation.set(...opts.rot);
   return g;
 }
+
+/**
+ * Sagging span — wire, cable or chain between two points with a parabolic sag.
+ * Real segments, never a texture: the silhouette dips, which is what sells
+ * overhead line work. Deterministic; `segments` trades smoothness for tris.
+ */
+export function wireSpan(
+  a: [number, number, number],
+  b: [number, number, number],
+  sag: number,
+  mat: THREE.Material,
+  opts: { radius?: number; segments?: number } = {}
+): THREE.Group {
+  const g = new THREE.Group();
+  const r = opts.radius ?? 0.012;
+  const n = Math.max(2, opts.segments ?? 8);
+  const va = new THREE.Vector3(...a);
+  const vb = new THREE.Vector3(...b);
+  const up = new THREE.Vector3(0, 1, 0);
+  let prev = va.clone();
+  for (let i = 1; i <= n; i++) {
+    const t = i / n;
+    const p = va.clone().lerp(vb, t);
+    p.y -= sag * 4 * t * (1 - t);
+    const dir = p.clone().sub(prev);
+    const len = dir.length();
+    const seg = part(cyl(r, r, len, 5), mat);
+    seg.position.copy(prev).addScaledVector(dir, 0.5);
+    seg.quaternion.setFromUnitVectors(up, dir.normalize());
+    seg.castShadow = false; // 12 mm line work: shadow cost outweighs the read
+    g.add(seg);
+    prev = p;
+  }
+  return g;
+}

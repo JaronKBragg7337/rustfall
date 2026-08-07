@@ -11,7 +11,7 @@
 // heightAt() is the single source of truth: the mesh, the player's feet, entity
 // grounding and prop placement all sample the same function.
 import * as THREE from "./three";
-import { WORLD, MATERIALS } from "./constants";
+import { WORLD, MATERIALS, QUALITY } from "./constants";
 import { cardTexture } from "./textures";
 
 // ─────────────────────────── deterministic noise ───────────────────────────
@@ -119,15 +119,26 @@ export function heightAt(x: number, z: number): number {
 
 // ─────────────────────────── dry wash ───────────────────────────
 // Batch 2 (item 12): a shallow eroded channel crossing the empty south-east
-// quadrant on a 45° diagonal — south edge near (45,-110) to east edge near
-// (110,-45). Analytic like the rest of the field: a signed across-line
-// coordinate, a slow sinusoidal meander, and a smoothstep bank profile, so the
-// mesh, feet, grounding and prop placement all inherit it from heightAt alone.
+// quadrant on a 45° diagonal. Analytic like the rest of the field: a signed
+// across-line coordinate, a slow sinusoidal meander, and a smoothstep bank
+// profile, so the mesh, feet, grounding and prop placement all inherit it from
+// heightAt alone.
 //
-// Siting was probed against every known asset footprint and every graded pad
-// before carving: the nearest asset (billboard S at 7.5,-70) sits 56 m from the
-// centreline and the closest the carve gets to any pad core is 18.45 m of
-// rectDist (highway corridor, fade 7) — so no existing asset floats or buries.
+// 400 m map: the unbent line (z − x + 155 = 0) would leave the south edge at
+// (−45,−200) — straight through the graded highway corridor pad at ≈(14,−141),
+// carving a 1.6 m channel under the road. So past u ≈ −35 (just down-wash of
+// the old map's south edge) the centreline bends south-east through the new,
+// deliberately empty outer ring and exits the south edge near (119,−200). The
+// drift is exactly 0 across u ∈ [−35, ∞), so the bridge (u=8), culvert (u=−20)
+// and every core asset see an unchanged channel. North-east it runs unbent and
+// exits the east edge at (200,45): the wash now genuinely crosses the bigger
+// map edge-to-edge.
+//
+// Siting was re-probed against every known asset footprint and every graded pad
+// after the bend: the carve is 0 at all of them (nearest approach to any pad's
+// fade edge is ≈16 m, highway corridor vs the bend) — so no existing asset
+// floats or buries. The bridge and culvert centres sit IN the channel by
+// design; their abutments/headwalls ground through heightAt like everything.
 const WASH = {
   halfW: 3.2,        // half the flat-ish channel bed — ~6.4 m wide
   bank: 6.0,         // sloped bank run beyond the bed → outer influence 9.2 m
@@ -135,6 +146,9 @@ const WASH = {
   meanderAmp: 3,
   meanderFreq: 0.0524, // ~120 m wavelength
   meanderPhase: 1.7,
+  bendStart: -35,    // u where the southern bend begins (0 drift up-wash of this)
+  bendEnd: -62,      // u where the bend has fully turned
+  bendDrift: -124,   // total across-line offset once the bend completes
 } as const;
 
 /** Along-wash coordinate in metres (origin near map centre). */
@@ -145,9 +159,27 @@ export function washV(x: number, z: number): number { return (z - x + 155) * Mat
 export function washMeander(u: number): number {
   return WASH.meanderAmp * Math.sin(WASH.meanderFreq * u + WASH.meanderPhase);
 }
+
+/**
+ * Southern extension drift, in v: 0 across the whole inhabited map, ramping to
+ * bendDrift through the new outer ring so the channel turns away from the
+ * highway corridor and out the south edge. Smoothstepped, so the bend is a
+ * curve, not a kink.
+ */
+function washDrift(u: number): number {
+  if (u >= WASH.bendStart) return 0;
+  const t = THREE.MathUtils.smoothstep(u, WASH.bendEnd, WASH.bendStart); // 1 at bendStart, 0 at bendEnd
+  return (1 - t) * WASH.bendDrift;
+}
+
+/** Total centreline offset in v: meander everywhere, drift only in the new ring. */
+function washOffset(u: number): number {
+  return washMeander(u) + washDrift(u);
+}
+
 /** Distance from (x,z) to the meandering centreline. */
 export function washDist(x: number, z: number): number {
-  return Math.abs(washV(x, z) - washMeander(washU(x, z)));
+  return Math.abs(washV(x, z) - washOffset(washU(x, z)));
 }
 
 /**
@@ -155,7 +187,7 @@ export function washDist(x: number, z: number): number {
  * tangent t runs down-wash (+45°), normal n across it (+v side).
  */
 export function washCenter(u: number): { x: number; z: number; tx: number; tz: number; nx: number; nz: number } {
-  const w = washMeander(u);
+  const w = washOffset(u);
   return {
     x: 77.5 + (u - w) * Math.SQRT1_2,
     z: -77.5 + (u + w) * Math.SQRT1_2,
@@ -164,7 +196,7 @@ export function washCenter(u: number): { x: number; z: number; tx: number; tz: n
   };
 }
 
-function washCarve(x: number, z: number): number {
+export function washCarve(x: number, z: number): number {
   const d = washDist(x, z);
   if (d >= WASH.halfW + WASH.bank) return 0;
   const t = 1 - THREE.MathUtils.smoothstep(d, WASH.halfW, WASH.halfW + WASH.bank);
@@ -196,10 +228,18 @@ function splatAt(x: number, z: number): [number, number, number, number] {
   const scorch = blob(x, z, 62, 62, 30);
   const rust = blob(x, z, -58, -50, 33);
   const mud = blob(x, z, -52, 48, 22);
+  // 400 m map: two more fields out in the new ring so the added ground isn't
+  // one endless dirt substrate. Both centres sit >55 m past the old ±100 edge
+  // (beyond their radius plus wobble), so the core map's blend is untouched
+  // and the scorch arena stays exactly where it was.
+  const rustOuter = blob(x, z, 152, 118, 40);
+  const mudOuter = blob(x, z, -150, -130, 42);
+  const rustAll = Math.max(rust, rustOuter);
+  const mudAll = Math.max(mud, mudOuter);
   // Dirt is the substrate; it never fully disappears, which keeps the blend honest.
-  const dirt = Math.max(0.12, 1 - Math.max(scorch, rust, mud));
-  const sum = dirt + scorch + rust + mud;
-  return [dirt / sum, scorch / sum, rust / sum, mud / sum];
+  const dirt = Math.max(0.12, 1 - Math.max(scorch, rustAll, mudAll));
+  const sum = dirt + scorch + rustAll + mudAll;
+  return [dirt / sum, scorch / sum, rustAll / sum, mudAll / sum];
 }
 
 // ─────────────────────────── material ───────────────────────────
@@ -288,13 +328,22 @@ export class Terrain {
   readonly mesh: THREE.Mesh;
 
   /**
-   * `extent` deliberately overruns the 200 m playable area. Terminating the mesh
+   * `extent` deliberately overruns the 400 m playable area. Terminating the mesh
    * at the world bound leaves a hard silhouette against the sky at eye level;
    * running it out past the fog distance means the ground simply dissolves.
+   *
+   * `segments` arrives from engine.ts as a per-tier floor (220 desktop /
+   * 140 mobile, tuned when the extent was 350 m). At the 700 m extent those
+   * counts would give 3.2 m/vertex desktop — past the ~1.8 m budget — so the
+   * constructor refines the floor up to the tier's target spacing:
+   *   desktop: ceil(700 / 1.75) = 400 segments → 401² verts, 1.75 m/vertex
+   *   mobile:  ceil(700 / 2.80) = 250 segments → 251² verts, 2.80 m/vertex
    */
   constructor(segments = 220, extent = WORLD.SIZE * 1.75) {
     const S = extent;
-    const geo = new THREE.PlaneGeometry(S, S, segments, segments);
+    const maxSpacing = QUALITY.mobile ? 2.8 : 1.75;
+    const segs = Math.max(segments, Math.ceil(S / maxSpacing));
+    const geo = new THREE.PlaneGeometry(S, S, segs, segs);
     geo.rotateX(-Math.PI / 2); // into XZ before displacing, so Y is world up
 
     const pos = geo.attributes.position as THREE.BufferAttribute;

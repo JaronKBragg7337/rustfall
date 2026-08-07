@@ -39,17 +39,21 @@ const NIGHT: SkyPalette = {
   // world was unplayably black, so these are set by what stays legible on screen
   // rather than by physical plausibility.
   sunIntensity: 0.55, hemiIntensity: 0.72, ambientIntensity: 0.22,
-  fogNear: 30, fogFar: 165, exposure: 1.75,
+  fogNear: 38, fogFar: 255, exposure: 1.75,
 };
 const TWILIGHT: SkyPalette = {
   zenith: hex(0x3d5480), horizon: hex(0xd97a3a), sun: hex(0xff9a52), fog: hex(0xa8724a),
   sunIntensity: 1.5, hemiIntensity: 0.7, ambientIntensity: 0.15,
-  fogNear: 36, fogFar: 185, exposure: 1.25,
+  fogNear: 46, fogFar: 285, exposure: 1.25,
 };
+// 400 m map: fog draw distances scale ~1.5x with the world. A corner-to-corner
+// sightline is now ~570 m, so the far ground still dissolves into haze well
+// inside the horizon, but the near field opens up enough that the bigger map
+// reads as bigger rather than equally walled-in.
 const DAY: SkyPalette = {
   zenith: hex(0x5d7f9e), horizon: hex(0xd7b98d), sun: hex(0xffd9a0), fog: hex(0xc3ab88),
   sunIntensity: 3.1, hemiIntensity: 1.05, ambientIntensity: 0.18,
-  fogNear: 48, fogFar: 215, exposure: 1.15,
+  fogNear: 64, fogFar: 330, exposure: 1.15,
 };
 
 export const SKY = DAY;
@@ -227,8 +231,8 @@ export class Sky {
         zenith: p.zenith.clone().lerp(dustCol, d * 0.45),
         sunIntensity: p.sunIntensity * (1 - d * 0.62),
         hemiIntensity: p.hemiIntensity * (1 - d * 0.2),
-        fogNear: THREE.MathUtils.lerp(p.fogNear, 8, d),
-        fogFar: THREE.MathUtils.lerp(p.fogFar, 62, d),
+        fogNear: THREE.MathUtils.lerp(p.fogNear, 10, d),
+        fogFar: THREE.MathUtils.lerp(p.fogFar, 88, d),
       };
     }
     this.palette = p;

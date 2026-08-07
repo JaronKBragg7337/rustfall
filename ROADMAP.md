@@ -73,8 +73,15 @@ Remaining: ~~craftable pipe rifle + scrap shotgun + workbench UI (14)~~ ✅, ~~s
 - ~~19. Rooftop garden / rain catcher~~ ✅ — planters + scarecrow on the roof (new access ladder), gutter → downpipe → corrugated tank
 - ~~20. Trading post NPC camp~~ ✅ — stall, campfire, TRADE sign, lanterns at the railway siding (`src/game/site_base.ts`)
 
-## Batch 3 — later
-17. Mobile-quality preset toggle in Settings (doctrine Part 5 table)
+## Batch 4 — shipped ✅ Map expansion 200 m → 400 m
+
+- **World core** ✅ — SIZE 400 (CELLS 100), terrain mesh 1.75 m/vertex desktop / 2.8 m mobile over 700 m extent, fog distances ~1.5×, inspection grid thinned beyond the core, scatter budget 96/48, two new biome fields in the outer ring, dry wash extended corner-to-corner (bends SE past u=−35 to dodge the highway pad; bridge/culvert channel unchanged)
+- **Crashed cargo plane** ✅ (NW, −140,−150) — walkable torn fuselage, tail section, sheared wing, debris trail, scorch discs
+- **Ruined suburban block** ✅ (SW, ~−150,120) — 3 house shells, 13 registered apertures, collapsed roofs, telephone pole with catenary wire, sedan hulk
+- **Military checkpoint** ✅ (S, 0,160) — sandbag nests, jersey barriers, watchtower + climb volume, chain perimeter
+- **Junkyard** ✅ (E, 172,−108) — crushed-car stacks, tire-wall maze, gantry crane rails + hoist
+
+## Batch 5 — later
 18. Playwright visual harness (doctrine 9.5) + scene-report regression CI
-19. Rooftop garden / rain catcher base upgrades
-20. Trading post NPC camp on the railway
+21. Trader NPC at the trading post (barter UI)
+22. Outer-ring entity spawns (boars/shamblers roam the ring)
