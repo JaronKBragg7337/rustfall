@@ -688,7 +688,7 @@ export class Game {
     } else if (this.mode === "MECH") {
       const stats = this.mech.stats;
       const fwd = new THREE.Vector3(Math.sin(this.player.camYaw), 0, Math.cos(this.player.camYaw));
-      const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), fwd);
+      const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0));
       const d = new THREE.Vector3().addScaledVector(fwd, input.y).addScaledVector(right, input.x);
       const mp = this.mech.group.position;
       if (d.lengthSq() > 0.01) {

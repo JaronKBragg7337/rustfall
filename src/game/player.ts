@@ -137,7 +137,9 @@ export class Player {
       const nx = mag > 1 ? input.x / mag : input.x;
       const ny = mag > 1 ? input.y / mag : input.y;
       const fwd = new THREE.Vector3(Math.sin(this.camYaw), 0, Math.cos(this.camYaw));
-      const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), fwd);
+      // right = forward × up (screen-right for a viewer facing `fwd`).
+      // cross(up, fwd) is the mirror — it swapped A/D and the joystick X axis.
+      const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0));
       desired.addScaledVector(fwd, ny).addScaledVector(right, nx);
       const analog = Math.min(1, mag); // gamepad/touch push depth scales speed
       const top = this.crouching ? FEEL.crouch : input.sprint ? FEEL.run : FEEL.walk;
@@ -303,8 +305,9 @@ export class Player {
 
     const pivot = anchor.clone();
     pivot.y += height;
-    // shoulder offset is perpendicular to the view direction
-    const rightVec = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
+    // shoulder offset is perpendicular to the view direction, on screen-right
+    // (forward × up — same basis as movement, was mirrored to the left)
+    const rightVec = new THREE.Vector3(-Math.cos(this.camYaw), 0, Math.sin(this.camYaw));
     pivot.addScaledVector(rightVec, shoulder);
 
     const offset = new THREE.Vector3(
