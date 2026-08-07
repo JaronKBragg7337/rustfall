@@ -61,7 +61,17 @@ Implementation: `src/game/site_industrial.ts` (structures/props), `src/game/gene
 ~~13. Wave night~~ ✅ — every 3rd night, horde assaults the base; lit floodlights repel them
 15. ~~Feral spore-boar~~ ✅ — telegraphed charge attack, knockback, 3-charge pattern
 
-Remaining: craftable pipe rifle + scrap shotgun + workbench UI (14), save/load (16)
+Remaining: ~~craftable pipe rifle + scrap shotgun + workbench UI (14)~~ ✅, ~~save/load (16)~~ ✅
+
+## Batch 3 — shipped ✅ (items 17, 19, 20) + Inventory
+
+- **Backpack & inventory** ✅ — 12-slot backpack (`src/game/inventory.ts`), PC (Tab/I) + mobile (🎒 PACK) UI, all pickups/quests/generator flow through it
+- **Save/load** ✅ — versioned localStorage save (`src/game/save.ts`), autosave 30 s + on tab-hide, Continue/New Game on start screen
+- **Weapons** ✅ — Pipe Rifle + Scrap Shotgun (`src/game/weapons.ts`), crafted at the workbench (E), 7/8/0 + scroll to select, WPN button on touch
+- **Quality presets** ✅ — Settings: AUTO/HIGH/BALANCED/BATTERY, persisted
+- ~~17. Mobile-quality preset toggle~~ ✅
+- ~~19. Rooftop garden / rain catcher~~ ✅ — planters + scarecrow on the roof (new access ladder), gutter → downpipe → corrugated tank
+- ~~20. Trading post NPC camp~~ ✅ — stall, campfire, TRADE sign, lanterns at the railway siding (`src/game/site_base.ts`)
 
 ## Batch 3 — later
 17. Mobile-quality preset toggle in Settings (doctrine Part 5 table)

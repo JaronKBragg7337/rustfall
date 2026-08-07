@@ -320,6 +320,38 @@ export class Audio {
     this.tone({ freq: 420, to: 620, dur: 0.13, gain: 0.14, type: "square" });
   }
 
+  /** Pipe rifle — one deep crack with a long low tail. */
+  rifleShot() {
+    this.burst({ dur: 0.2, type: "bandpass", freq: 700, q: 0.7, gain: 0.55 });
+    this.tone({ freq: 420, to: 60, dur: 0.3, gain: 0.3, type: "sawtooth" });
+    this.burst({ dur: 0.5, type: "lowpass", freq: 260, q: 0.7, gain: 0.22, delay: 0.03 });
+  }
+
+  /** Scrap shotgun — a wide noise boom, six pellets leaving as one roar. */
+  shotgunBlast() {
+    this.burst({ dur: 0.3, type: "lowpass", freq: 900, q: 0.6, gain: 0.6 });
+    this.burst({ dur: 0.12, type: "highpass", freq: 2000, q: 0.8, gain: 0.3 });
+    this.tone({ freq: 190, to: 45, dur: 0.34, gain: 0.34, type: "square" });
+  }
+
+  /** Workbench craft — hammer on an anvil: two metal clanks and a ring. */
+  craftClank() {
+    this.burst({ dur: 0.09, type: "bandpass", freq: 2600, q: 4, gain: 0.3 });
+    this.tone({ freq: 1180, to: 900, dur: 0.22, gain: 0.16, type: "square" });
+    this.burst({ dur: 0.08, type: "bandpass", freq: 3100, q: 4, gain: 0.22, delay: 0.12 });
+    this.tone({ freq: 1560, to: 1240, dur: 0.3, gain: 0.12, type: "triangle", delay: 0.12 });
+  }
+
+  /** Backpack panel — a soft zip: opening rises, closing falls. */
+  panel(open: boolean) {
+    if (open) {
+      this.tone({ freq: 320, to: 640, dur: 0.1, gain: 0.07, type: "triangle" });
+      this.tone({ freq: 880, dur: 0.06, gain: 0.05, type: "sine", delay: 0.08 });
+    } else {
+      this.tone({ freq: 640, to: 300, dur: 0.1, gain: 0.07, type: "triangle" });
+    }
+  }
+
   ui() {
     this.tone({ freq: 880, dur: 0.05, gain: 0.07, type: "square" });
   }

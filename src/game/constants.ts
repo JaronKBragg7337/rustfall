@@ -27,6 +27,64 @@ export const QUALITY = {
   props: IS_MOBILE ? 34 : 64,
 } as const;
 
+// ── Quality presets (Batch 3, item 17) ──
+// The Settings panel can override the AUTO (device-tier) defaults. Doctrine
+// Part 5's two mobile columns become the bookends: HIGH is the "modern"
+// preset (≤2 DPR, 2048 tracked shadows), BATTERY the "conservative" one
+// (≤1 DPR, 512 map). Entity/prop counts follow the preset on the next boot —
+// respawning the population mid-run would be chaos.
+export type QualityPreset = "AUTO" | "HIGH" | "BALANCED" | "BATTERY";
+
+export const QUALITY_KEY = "rustfall.quality";
+
+export interface QualitySettings {
+  maxPixelRatio: number;
+  shadowMapSize: number;
+  shadowRadius: number;
+  /** Population budgets; applied at world build time (next boot). */
+  shamblers: number;
+  props: number;
+  fuelCans: number;
+}
+
+export function qualitySettings(p: QualityPreset): QualitySettings {
+  switch (p) {
+    case "HIGH":
+      return { maxPixelRatio: 2, shadowMapSize: 2048, shadowRadius: 45, shamblers: 8, props: 64, fuelCans: 8 };
+    case "BALANCED":
+      return { maxPixelRatio: 1.5, shadowMapSize: 1024, shadowRadius: 40, shamblers: 6, props: 48, fuelCans: 6 };
+    case "BATTERY":
+      return { maxPixelRatio: 1, shadowMapSize: 512, shadowRadius: 34, shamblers: 4, props: 28, fuelCans: 5 };
+    default:
+      return {
+        maxPixelRatio: QUALITY.maxPixelRatio,
+        shadowMapSize: QUALITY.shadowMapSize,
+        shadowRadius: QUALITY.shadowRadius,
+        shamblers: QUALITY.shamblers,
+        props: QUALITY.props,
+        fuelCans: QUALITY.mobile ? 5 : 8,
+      };
+  }
+}
+
+export function getQualityPreset(): QualityPreset {
+  try {
+    const raw = localStorage.getItem(QUALITY_KEY);
+    if (raw === "HIGH" || raw === "BALANCED" || raw === "BATTERY") return raw;
+  } catch {
+    /* no storage — AUTO */
+  }
+  return "AUTO";
+}
+
+export function storeQualityPreset(p: QualityPreset) {
+  try {
+    localStorage.setItem(QUALITY_KEY, p);
+  } catch {
+    /* private mode: session-only */
+  }
+}
+
 // The home base is a sanctuary: hostiles will not path inside it and the player
 // recovers there. `feather` is the band over which the repulsion ramps up, so
 // robots veer away from the perimeter instead of pinballing off an invisible wall.

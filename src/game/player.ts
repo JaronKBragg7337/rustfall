@@ -14,6 +14,7 @@ import * as THREE from "./three";
 import { WORLD, registerAsset } from "./constants";
 import { Humanoid, STYLES } from "./figures";
 import { heightAt } from "./terrain";
+import { Inventory } from "./inventory";
 
 export const FEEL = {
   deadZone: 0.12,
@@ -63,8 +64,8 @@ export class Player {
   camPitch = 0.22;
   hp = 100;
   maxHp = 100;
-  /** Fuel cans carried, waiting to be fed into the base generator. */
-  fuel = 0;
+  /** Everything carried: fuel cans, scrap, crafted gear. HUD counters read this. */
+  readonly inventory = new Inventory();
 
   velocity = new THREE.Vector3();
   grounded = true;

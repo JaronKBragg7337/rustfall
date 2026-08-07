@@ -17,6 +17,7 @@ import { bev, part, flatBox, cyl, bolts, rivets, along, seam, weld, vent, hinge,
 import { heightAt, normalAt } from "./terrain";
 import { buildIndustrial } from "./site_industrial";
 import { buildWash } from "./site_wash";
+import { buildBaseUpgrades } from "./site_base";
 
 export interface WorldRefs {
   scene: THREE.Scene;
@@ -508,6 +509,14 @@ export function buildWorld(refs: WorldRefs): void {
   container(35.5, -29.6, 1.55, S.containerBlue);        // turned across the yard
   container(-46, 22, 0.9, S.containerBlue);
   container(-43.7, 23.8, 0.9, S.shanty);                // offset along local +Z (the beam axis)
+
+  // ── BASE UPGRADES (Batch 3, items 19–20 — see site_base.ts) ────────────
+  // Salvager's workbench, rooftop garden, rain catcher, and the railway
+  // trading post. Runs BEFORE the Homestead on purpose: the crafting
+  // interaction looks up role "workbench" in the asset registry, and the
+  // small interior bench built by buildHomestead below must not win that
+  // lookup. Own RNG stream (41771); the scatter sequence below is untouched.
+  buildBaseUpgrades(refs);
 
   // ── THE HOMESTEAD ──────────────────────────────────────────────────────
   buildHomestead(solid, deco, unit);

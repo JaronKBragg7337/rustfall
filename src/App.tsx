@@ -3,7 +3,9 @@ import { Game, type HudState } from "@/game/engine";
 import type { TouchState } from "@/game/touch";
 import { PIECES } from "@/game/build";
 import { MECH_PARTS } from "@/game/entities";
-import { IS_TOUCH } from "@/game/constants";
+import { IS_TOUCH, type QualityPreset } from "@/game/constants";
+import { ITEMS, SLOT_COUNT } from "@/game/inventory";
+import { RECIPES } from "@/game/weapons";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +17,8 @@ const INITIAL_HUD: HudState = {
   mechBayOpen: false, issues: 0, address: "0, 0, 0", nearby: [], muted: false, timeOfDay: 0.42, clock: "10:04", dust: 0, timeFrozen: false, toast: "", lootLeft: 0,
   firstPerson: false, devMode: false, safe: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
   waveNight: false, quest: null,
+  inventory: new Array(SLOT_COUNT).fill(null), inventoryOpen: false, craftOpen: false,
+  weapon: { id: "pulse", name: "PULSE SIDEARM", glyph: "🔫" }, hasWeapons: false, quality: "AUTO",
 };
 
 /**
@@ -51,13 +55,19 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [touch, setTouch] = useState<TouchState | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  // Item 16: the start screen gates on these — Continue only when a valid save exists.
+  const [started, setStarted] = useState(false);
+  const [saveAvailable, setSaveAvailable] = useState(false);
 
   useEffect(() => {
     const game = new Game(canvasRef.current!);
     gameRef.current = game;
     game.onHud = (h) => setHud((prev) => (JSON.stringify(prev) === JSON.stringify(h) ? prev : h));
     game.onTouch = (t) => setTouch(t ? { ...t } : null);
-    game.init().then(() => setReady(true));
+    game.init().then(() => {
+      setReady(true);
+      setSaveAvailable(game.hasSave());
+    });
     return () => game.dispose();
   }, []);
 
@@ -78,6 +88,38 @@ export default function App() {
           <div className="text-[10px] sm:text-xs tracking-widest text-zinc-500 animate-pulse">
             FORGING WASTELAND · SLICING TEXTURE ATLASES…
           </div>
+        </div>
+      )}
+
+      {/* ── start screen: Continue when a save exists, otherwise straight in ── */}
+      {ready && !started && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-zinc-950/85 backdrop-blur-sm px-6 text-center">
+          <div className="text-3xl sm:text-5xl font-black tracking-[0.3em] sm:tracking-[0.4em] text-amber-200 mb-2">RUSTFALL</div>
+          <div className="text-[10px] sm:text-xs tracking-widest text-zinc-500 mb-8">A DETERMINISTIC WASTELAND</div>
+          <div className="flex flex-col gap-3 w-56">
+            {saveAvailable && (
+              <button
+                onPointerDown={() => { gameRef.current?.continueRun(); setStarted(true); }}
+                className="py-3 rounded-md border border-amber-400/80 bg-amber-500/15 text-amber-200
+                           text-sm tracking-[0.25em] font-bold active:bg-amber-500/30">
+                ▸ CONTINUE
+              </button>
+            )}
+            <button
+              onPointerDown={() => { gameRef.current?.startNewRun(); setStarted(true); setSaveAvailable(false); }}
+              className={`py-3 rounded-md border text-sm tracking-[0.25em] font-bold active:bg-zinc-700/60 ${
+                saveAvailable
+                  ? "border-zinc-600 bg-zinc-900/70 text-zinc-300"
+                  : "border-amber-400/80 bg-amber-500/15 text-amber-200"
+              }`}>
+              {saveAvailable ? "✕ NEW GAME" : "▸ NEW GAME"}
+            </button>
+          </div>
+          {saveAvailable && (
+            <div className="mt-4 text-[9px] sm:text-[10px] tracking-widest text-zinc-500">
+              NEW GAME ERASES THE SAVED RUN
+            </div>
+          )}
         </div>
       )}
 
@@ -153,6 +195,7 @@ export default function App() {
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-300">☠ {hud.kills}</Badge>
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-amber-700 text-amber-300">⛏ {hud.scrap}</Badge>
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-red-800 text-red-300">⛽ {hud.fuel}</Badge>
+          <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-sky-700 text-sky-300">{hud.weapon.glyph} {hud.weapon.name}</Badge>
           {(hud.genRunning || hud.genFuel > 0 || hud.safe) && (
             <Badge variant="outline" className={`text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest ${
               hud.genLit ? "border-yellow-400 text-yellow-300" : hud.genRunning ? "border-emerald-600 text-emerald-300" : "border-zinc-600 text-zinc-400"
@@ -291,6 +334,29 @@ export default function App() {
             </button>
           </div>
 
+          {/* graphics quality preset (Batch 3, item 17) */}
+          <div className="rounded border border-zinc-700 bg-zinc-900/40 p-2 sm:p-3 mb-2">
+            <div className="text-[11px] sm:text-xs font-bold tracking-widest text-amber-200 mb-1.5">QUALITY</div>
+            <div className="grid grid-cols-4 gap-1">
+              {(["AUTO", "HIGH", "BALANCED", "BATTERY"] as QualityPreset[]).map((p) => (
+                <button key={p} onPointerDown={() => g()?.setQuality(p)}
+                  className={`py-1.5 rounded border text-[9px] sm:text-[10px] tracking-widest ${
+                    hud.quality === p
+                      ? "border-amber-400 text-amber-200 bg-amber-500/15"
+                      : "border-zinc-700 text-zinc-400 active:border-zinc-500"}`}>
+                  {p === hud.quality ? `● ${p}` : p}
+                </button>
+              ))}
+            </div>
+            <div className="text-[9px] text-zinc-500 mt-1 leading-snug">
+              {hud.quality === "HIGH" && "2× pixels · 2048 shadows. Desktop-class."}
+              {hud.quality === "BALANCED" && "1.5× pixels · 1024 shadows."}
+              {hud.quality === "BATTERY" && "1× pixels · 512 shadows. Coolest run."}
+              {hud.quality === "AUTO" && "Follows the device tier automatically."}
+              {" "}Population changes apply on reload.
+            </div>
+          </div>
+
           {/* view mode */}
           <div className="rounded border border-zinc-700 bg-zinc-900/40 p-2 sm:p-3 mb-2">
             <div className="text-[11px] sm:text-xs font-bold tracking-widest text-amber-200 mb-1.5">VIEW</div>
@@ -337,10 +403,11 @@ export default function App() {
           {showHelp && (
             <div className="mt-2 text-[10px] text-zinc-500 leading-relaxed">
               {IS_TOUCH ? (
-                <>Left thumb drag = move (push far to sprint) · Right thumb drag = look · Buttons at right = fire, jump, interact, build.</>
+                <>Left thumb drag = move (push far to sprint) · Right thumb drag = look · Buttons at right = fire, jump, use, build, 🎒 backpack · WPN cycles owned guns · E at the workbench opens crafting.</>
               ) : (
                 <><span className="text-zinc-300">WASD</span> move · <span className="text-zinc-300">SHIFT</span> sprint · <span className="text-zinc-300">SPACE</span> jump ·{" "}
-                <span className="text-zinc-300">CTRL</span> crouch · <span className="text-zinc-300">CLICK</span> fire · <span className="text-zinc-300">E</span> board/exit ·{" "}
+                <span className="text-zinc-300">CTRL</span> crouch · <span className="text-zinc-300">CLICK</span> fire · <span className="text-zinc-300">E</span> use/craft ·{" "}
+                <span className="text-zinc-300">TAB/I</span> backpack · <span className="text-zinc-300">7/8/0</span> weapons · <span className="text-zinc-300">SCROLL</span> cycle ·{" "}
                 <span className="text-zinc-300">Q</span> seat · <span className="text-zinc-300">B</span> build · <span className="text-zinc-300">1-6</span> piece ·{" "}
                 <span className="text-zinc-300">R</span> rotate · <span className="text-zinc-300">M</span> mech bay · <span className="text-zinc-300">L</span> layer</>
               )}
@@ -433,6 +500,107 @@ export default function App() {
         </div>
       )}
 
+      {/* ── BACKPACK panel (Tab / I / 🎒) — one immutable owner per pointer:
+              every slot is a DOM button above the canvas, so canvas touch
+              routing never sees these presses. ── */}
+      {hud.inventoryOpen && !hud.cinematic && (
+        <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center"
+             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+             onPointerDown={() => g()?.toggleInventory()}>
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="w-[min(24rem,calc(100vw-1rem))] rounded-md border border-amber-700/70 bg-zinc-950/95
+                       p-3 sm:p-4 text-zinc-200 shadow-2xl mb-2 sm:mb-0">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] sm:text-xs font-bold tracking-[0.25em] text-amber-200">🎒 BACKPACK</div>
+              <button onPointerDown={() => g()?.toggleInventory()}
+                className="w-8 h-8 -mr-1 rounded text-zinc-400 hover:text-zinc-100 text-base leading-none">✕</button>
+            </div>
+            <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+              {hud.inventory.map((slot, i) => (
+                <button
+                  key={i}
+                  onPointerDown={(e) => { e.stopPropagation(); if (slot) g()?.useInventoryItem(i); }}
+                  className={`relative aspect-square rounded border flex flex-col items-center justify-center
+                    ${slot
+                      ? hud.weapon.id === slot.id
+                        ? "border-sky-400 bg-sky-500/15"
+                        : "border-zinc-600 bg-zinc-900/80 active:border-amber-400"
+                      : "border-zinc-800 bg-zinc-950/60"}`}>
+                  {slot && (
+                    <>
+                      <span className="text-xl sm:text-2xl leading-none">{ITEMS[slot.id].glyph}</span>
+                      <span className="text-[7px] sm:text-[8px] tracking-widest text-zinc-400 mt-1 px-0.5 truncate w-full text-center">
+                        {ITEMS[slot.id].name}
+                      </span>
+                      {slot.count > 1 && (
+                        <span className="absolute top-0.5 right-1 text-[9px] sm:text-[10px] font-bold text-amber-300">
+                          ×{slot.count}
+                        </span>
+                      )}
+                      {hud.weapon.id === slot.id && (
+                        <span className="absolute top-0.5 left-1 text-[7px] tracking-widest text-sky-300">EQUIPPED</span>
+                      )}
+                    </>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 text-[9px] sm:text-[10px] text-zinc-500 leading-snug">
+              {IS_TOUCH ? "Tap an item to use or equip it." : "Click an item to use or equip it · [7] rifle · [8] shotgun · [0] sidearm · scroll cycles."}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── WORKBENCH crafting menu (E at the bench) ── */}
+      {hud.craftOpen && !hud.cinematic && (
+        <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center"
+             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+             onPointerDown={() => g()?.closePanels()}>
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="w-[min(24rem,calc(100vw-1rem))] rounded-md border border-orange-700/70 bg-zinc-950/95
+                       p-3 sm:p-4 text-zinc-200 shadow-2xl mb-2 sm:mb-0">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] sm:text-xs font-bold tracking-[0.25em] text-orange-300">🔨 WORKBENCH</div>
+              <button onPointerDown={() => g()?.closePanels()}
+                className="w-8 h-8 -mr-1 rounded text-zinc-400 hover:text-zinc-100 text-base leading-none">✕</button>
+            </div>
+            <div className="text-[9px] sm:text-[10px] tracking-widest text-zinc-500 mb-2">
+              SCRAP ON HAND: <span className="text-amber-300">⚙ {hud.scrap}</span>
+            </div>
+            {RECIPES.map((r) => {
+              const owned = hud.inventory.some((s) => s !== null && s.id === r.item);
+              const afford = hud.scrap >= r.cost;
+              return (
+                <div key={r.item} className="flex items-center gap-2 rounded border border-zinc-700 bg-zinc-900/50 px-2 py-2 mb-1.5">
+                  <span className="text-2xl leading-none">{ITEMS[r.item].glyph}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] sm:text-xs font-bold tracking-widest text-zinc-100">{r.name}</div>
+                    <div className="text-[8px] sm:text-[9px] text-zinc-500 leading-snug">{r.blurb}</div>
+                  </div>
+                  <button
+                    onPointerDown={(e) => { e.stopPropagation(); g()?.craft(r.item); }}
+                    disabled={owned || !afford}
+                    className={`shrink-0 px-2.5 py-2 rounded border text-[10px] sm:text-[11px] tracking-widest font-bold
+                      ${owned
+                        ? "border-emerald-700 text-emerald-400"
+                        : afford
+                          ? "border-orange-500 text-orange-200 active:bg-orange-500/25"
+                          : "border-zinc-800 text-zinc-600"}`}>
+                    {owned ? "OWNED" : `⚙ ${r.cost}`}
+                  </button>
+                </div>
+              );
+            })}
+            <div className="mt-1 text-[9px] sm:text-[10px] text-zinc-500 leading-snug">
+              Crafting spends scrap from the backpack. New guns equip right away.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── TOUCH: floating joystick, drawn where the thumb landed ── */}
       {joyVisible && touch && (
         <div className="absolute z-20 pointer-events-none" style={{ left: touch.joyOx, top: touch.joyOy, transform: "translate(-50%,-50%)" }}>
@@ -444,8 +612,9 @@ export default function App() {
         </div>
       )}
 
-      {/* ── TOUCH: action cluster, placed in the right thumb's natural arc ── */}
-      {IS_TOUCH && ready && !hud.cinematic && (
+      {/* ── TOUCH: action cluster, placed in the right thumb's natural arc ──
+              Hidden while a panel (backpack / workbench) owns the screen. */}
+      {IS_TOUCH && ready && !hud.cinematic && !hud.inventoryOpen && !hud.craftOpen && (
         <div className="absolute z-30 right-3 bottom-5" style={{ paddingRight: "env(safe-area-inset-right)", paddingBottom: "env(safe-area-inset-bottom)" }}>
           <div className="relative w-40 h-40">
             <TouchBtn label="FIRE" className="absolute right-0 bottom-8 w-[68px] h-[68px] text-[11px]"
@@ -456,6 +625,8 @@ export default function App() {
               onDown={() => g()?.pressInteract()} />
             <TouchBtn label="⌂" sub="BUILD" className="absolute right-[80px] bottom-[64px] w-12 h-12 text-sm"
               onDown={() => g()?.toggleBuild()} />
+            <TouchBtn label="🎒" sub="PACK" className="absolute right-[118px] bottom-[22px] w-12 h-12 text-sm"
+              onDown={() => g()?.toggleInventory()} />
           </div>
           {/* contextual extras only when they apply, so the screen stays clear */}
           <div className="absolute right-[168px] bottom-6 flex flex-col gap-2">
@@ -467,6 +638,9 @@ export default function App() {
             )}
             {hud.mode === "MECH" && (
               <TouchBtn label="⚙" sub="BAY" className="w-12 h-12 text-sm" onDown={() => g()?.toggleMechBay()} />
+            )}
+            {hud.mode === "FOOT" && hud.hasWeapons && (
+              <TouchBtn label={hud.weapon.glyph} sub="WPN" className="w-12 h-12 text-sm" onDown={() => g()?.cycleWeapon(1)} />
             )}
           </div>
         </div>

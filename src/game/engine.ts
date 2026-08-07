@@ -1,9 +1,9 @@
 // RUSTFALL engine — scene, loop, input, combat, interactions, layer switching.
 import * as THREE from "./three";
-import { makeRng, QUALITY, IS_TOUCH, SAFE_ZONE, safeZoneFactor, assetRegistry } from "./constants";
+import { makeRng, QUALITY, IS_TOUCH, SAFE_ZONE, safeZoneFactor, assetRegistry, qualitySettings, getQualityPreset, storeQualityPreset, type QualityPreset } from "./constants";
 import { loadAtlases } from "./textures";
 import { buildWorld } from "./world";
-import { Robot, Shambler, RunnerShambler, StalkerBot, SporeBoar, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity } from "./entities";
+import { Robot, Shambler, RunnerShambler, StalkerBot, SporeBoar, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity, type Job } from "./entities";
 import { QUESTS, questComplete, type ActiveQuest } from "./quests";
 import { Generator } from "./generator";
 import { Player, FEEL, type MoveInput } from "./player";
@@ -17,6 +17,9 @@ import { LootField, LOOTABLE } from "./loot";
 import { sceneReport, assetsNear, diffReports, formatReport, type SceneReport, type AssetSnapshot } from "./report";
 import { Audio } from "./audio";
 import { Particles, DustField } from "./particles";
+import { Inventory, type Slot } from "./inventory";
+import { WEAPONS, RECIPES, makeRifleProp, makeShotgunProp, type WeaponId } from "./weapons";
+import { SAVE_VERSION, loadSave, writeSave, clearSave, hasSave, type SaveData } from "./save";
 
 export interface HudState {
   hp: number;
@@ -69,6 +72,17 @@ export interface HudState {
     target: number;
     rewardText: string;
   } | null;
+  /** Backpack grid (Batch 2): fixed 12 slots, null = empty. */
+  inventory: (Slot | null)[];
+  inventoryOpen: boolean;
+  /** Workbench crafting menu (Batch 2 item 14). */
+  craftOpen: boolean;
+  /** Equipped weapon, for the HUD badge. */
+  weapon: { id: WeaponId; name: string; glyph: string };
+  /** True once any craftable gun is owned — shows the mobile WPN button. */
+  hasWeapons: boolean;
+  /** Active graphics preset (Batch 3 item 17). */
+  quality: QualityPreset;
 }
 
 interface Ring { obj: THREE.Mesh; t: number; }
@@ -98,7 +112,6 @@ export class Game {
   private mode: "FOOT" | "VEHICLE" | "MECH" = "FOOT";
   private mechBayOpen = false;
   private kills = 0;
-  private scrap = 0;
   private lastIssueCount = 0;
   private nearbyPanel: Array<{ id: string; role: string; address: string; clearance: number; dist: number }> = [];
   private nearbyTimer = 0;
@@ -141,6 +154,20 @@ export class Game {
   private waveSet = new Set<Shambler | RunnerShambler>();
   /** The one active fetch quest (item 11). */
   private quest: ActiveQuest | null = null;
+  // ── Backpack / weapons / crafting (items 14 + inventory) ──
+  /** Equipped weapon; "pulse" is the always-carried sidearm. */
+  private currentWeapon: WeaponId = "pulse";
+  /** Gun prop riding the player model, swapped on equip. */
+  private weaponProp: THREE.Group | null = null;
+  private inventoryOpen = false;
+  private craftOpen = false;
+  // ── Save/load (item 16) ──
+  /** Wall of the run: autosaves only tick while a run is actually in play. */
+  private runStarted = false;
+  private saveTimer = 0;
+  private static readonly AUTOSAVE_EVERY = 30; // seconds
+  // ── Quality preset (item 17) ──
+  private quality: QualityPreset = getQualityPreset();
 
   onHud: (h: HudState) => void = () => {};
   onTouch: (t: TouchState | null) => void = () => {};
@@ -153,12 +180,17 @@ export class Game {
     await loadAtlases();
     this.player = new Player();
 
+    // Quality preset (item 17): AUTO defers to the device-tier QUALITY row;
+    // the three manual presets override pixel ratio, shadow rig and the
+    // population budgets used below.
+    const qs = qualitySettings(this.quality);
+
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: !QUALITY.mobile,
       powerPreference: "high-performance",
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY.maxPixelRatio));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, qs.maxPixelRatio));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = QUALITY.mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     // Filmic response — without it the 3+ intensity sun clips every lit face to paper.
@@ -168,8 +200,8 @@ export class Game {
 
     // ── Atmosphere: low amber sun, dust haze, viewer-tracked shadow rig ──
     this.sky = new Sky(this.scene, {
-      shadowRadius: QUALITY.shadowRadius,
-      shadowMapSize: QUALITY.shadowMapSize,
+      shadowRadius: qs.shadowRadius,
+      shadowMapSize: qs.shadowMapSize,
     });
 
     this.fx = new Particles(this.scene, QUALITY.mobile ? 320 : 700);
@@ -206,7 +238,7 @@ export class Game {
     // ── Fuel cans: the generator's diet, scattered with their own seed ──
     {
       const fuelRng = makeRng(9917);
-      const cans = QUALITY.mobile ? 5 : 8;
+      const cans = qs.fuelCans;
       for (let i = 0; i < cans; i++) {
         const a = fuelRng() * Math.PI * 2;
         const r = 15 + fuelRng() * 65;
@@ -253,14 +285,14 @@ export class Game {
     }
     for (let i = 0; i < 3; i++) {
       const r = new Robot(spawn(6, 16), false); // helpful ones WORK the salvage loop
-      r.onDeliver = () => { this.scrap += 1; };
+      r.onDeliver = () => { this.player.inventory.add("scrap", 1); };
       this.entities.push(r);
     }
     for (const e of this.entities) this.scene.add(e.group);
     // Runner shamblers REPLACE part of the pack rather than adding to it, so
     // mobile keeps its QUALITY.shamblers budget — one in four, rounded up.
     {
-      const shamblerCount = QUALITY.shamblers;
+      const shamblerCount = qs.shamblers;
       const runnerCount = Math.max(1, Math.round(shamblerCount / 4));
       for (let i = 0; i < shamblerCount; i++) {
         const pos = spawn(30, 85);
@@ -365,6 +397,16 @@ export class Game {
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.repeat) return;
     this.audio.resume();
+    // Panels own Escape/Tab while open — one owner per key, per state.
+    if (e.code === "Escape" && (this.inventoryOpen || this.craftOpen)) {
+      this.closePanels();
+      return;
+    }
+    if (e.code === "Tab" || e.code === "KeyI") {
+      e.preventDefault(); // Tab would otherwise walk browser focus off the canvas
+      this.toggleInventory();
+      return;
+    }
     this.keys.add(e.code);
     if (e.code === "KeyL") this.setLayer(this.inspection.mode === "game" ? "inspection" : "game");
     if (e.code === "KeyV") this.toggleFirstPerson();
@@ -376,10 +418,24 @@ export class Game {
     if (e.code === "KeyE") this.interact();
     if (e.code === "KeyQ" && this.mode === "VEHICLE" && this.currentVehicle) this.currentVehicle.cycleSeat();
     if (e.code === "KeyM" && this.mode === "MECH") this.mechBayOpen = !this.mechBayOpen;
+    // Weapon select on 7/8 (Q is seats, 1-6 belong to build mode while it is open).
+    if (!this.buildMode.active && e.code === "Digit7") this.selectWeapon("pipe_rifle");
+    if (!this.buildMode.active && e.code === "Digit8") this.selectWeapon("scrap_shotgun");
+    if (!this.buildMode.active && e.code === "Digit0") this.selectWeapon("pulse");
     if (this.buildMode.active && e.code.startsWith("Digit")) {
       const n = parseInt(e.code.slice(5), 10) - 1;
       if (n >= 0 && n < PIECES.length) this.buildMode.select(n);
     }
+  };
+  /** Scroll wheel cycles OWNED weapons while on foot — never in build mode. */
+  private onWheel = (e: WheelEvent) => {
+    if (this.buildMode.active || this.inventoryOpen || this.craftOpen || this.cinema.active) return;
+    if (this.mode !== "FOOT") return;
+    this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+  };
+  /** Item 16: a backgrounding tab gets one last save before the OS freezes it. */
+  private onVisibility = () => {
+    if (document.visibilityState === "hidden") this.saveNow();
   };
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
   private onMouseMove = (e: MouseEvent) => {
@@ -389,6 +445,9 @@ export class Game {
   private onMouseDown = (e: MouseEvent) => {
     this.audio.resume(); // browsers refuse audio until a real gesture
     if (e.button !== 0) return;
+    // While a panel is open its buttons own the clicks — re-locking the pointer
+    // here would swallow the click that was meant for a backpack slot.
+    if (this.inventoryOpen || this.craftOpen) return;
     if (!IS_TOUCH && document.pointerLockElement !== this.canvas) {
       this.canvas.requestPointerLock();
       return;
@@ -407,6 +466,7 @@ export class Game {
 
   /** Left click / fire button: place a piece in build mode, otherwise shoot. */
   private primary() {
+    if (this.inventoryOpen || this.craftOpen) return; // panels own the clicks while open
     if (this.buildMode.active) {
       const res = this.buildMode.place();
       if (res) {
@@ -425,8 +485,10 @@ export class Game {
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("mousemove", this.onMouseMove);
     window.addEventListener("mousedown", this.onMouseDown);
+    window.addEventListener("wheel", this.onWheel, { passive: true });
     window.addEventListener("pointercancel", this.onPointerCancel);
     window.addEventListener("blur", this.onBlur);
+    document.addEventListener("visibilitychange", this.onVisibility);
     if (IS_TOUCH) {
       this.touch = new TouchControls(this.canvas);
       this.canvas.addEventListener("pointerdown", () => this.audio.resume(), { passive: true });
@@ -478,6 +540,254 @@ export class Game {
 
   pressInteract() { this.interact(); }
 
+  // ── Backpack, weapons & workbench (Batch 2 items 14 + inventory) ──
+
+  /**
+   * Where crafting happens. The bench prop is looked up by registry role at
+   * runtime (same pattern as the watchtower spotlight), so if the world build
+   * hasn't shipped one yet the Homestead centre itself counts as the bench —
+   * a graceful fallback, not a world-file edit.
+   */
+  private workbenchPos(): { pos: THREE.Vector3; fallback: boolean } {
+    const rec = assetRegistry.find((r) => r.role === "workbench");
+    if (rec) {
+      const v = new THREE.Vector3();
+      rec.object.getWorldPosition(v);
+      return { pos: v, fallback: false };
+    }
+    return { pos: new THREE.Vector3(SAFE_ZONE.x, 0, SAFE_ZONE.z), fallback: true };
+  }
+
+  private nearWorkbench(p: THREE.Vector3): boolean {
+    const w = this.workbenchPos();
+    const r = w.fallback ? 6 : 2.8; // the fallback is a place, the prop is a thing
+    return Math.hypot(w.pos.x - p.x, w.pos.z - p.z) < r;
+  }
+
+  /** Backpack panel toggle (Tab / I on PC, 🎒 button on touch). */
+  toggleInventory() {
+    if (this.craftOpen) this.craftOpen = false; // one panel at a time
+    this.inventoryOpen = !this.inventoryOpen;
+    this.audio.panel(this.inventoryOpen);
+    // The cursor must be free to click slots; re-lock happens on the next
+    // canvas click, which is the existing pointer-lock contract.
+    if (this.inventoryOpen && !IS_TOUCH) document.exitPointerLock?.();
+  }
+
+  closePanels() {
+    if (this.inventoryOpen || this.craftOpen) this.audio.panel(false);
+    this.inventoryOpen = false;
+    this.craftOpen = false;
+  }
+
+  private openCraft() {
+    this.craftOpen = true;
+    this.inventoryOpen = false;
+    this.audio.panel(true);
+    if (!IS_TOUCH) document.exitPointerLock?.();
+  }
+
+  /** Tap/click a backpack slot: fuel feeds a nearby generator, guns equip. */
+  useInventoryItem(i: number) {
+    const slot = this.player.inventory.slots[i];
+    if (!slot) return;
+    switch (slot.id) {
+      case "fuel_can":
+        if (this.generator.near(this.player.position)) {
+          this.player.inventory.remove("fuel_can", 1);
+          this.generator.feed();
+          this.audio.build();
+          this.say(`GENERATOR FUELED · ${this.generator.fuel.toFixed(1)} CANS`);
+        } else {
+          this.say("NO GENERATOR IN RANGE — CARRY IT HOME");
+          this.audio.ui();
+        }
+        break;
+      case "pipe_rifle":
+      case "scrap_shotgun":
+        this.selectWeapon(slot.id);
+        break;
+      case "scrap":
+        this.say("RAW MATERIAL — CRAFT IT AT THE WORKBENCH");
+        this.audio.ui();
+        break;
+    }
+  }
+
+  /** Craft at the workbench. Scrap is checked and spent from the backpack. */
+  craft(item: (typeof RECIPES)[number]["item"]) {
+    const r = RECIPES.find((x) => x.item === item);
+    if (!r) return;
+    const inv = this.player.inventory;
+    if (inv.has(item)) { this.say(`${r.name} ALREADY IN YOUR PACK`); this.audio.ui(); return; }
+    const have = inv.count("scrap");
+    if (have < r.cost) { this.say(`NEED ${r.cost} SCRAP · HAVE ${have}`); this.audio.ui(); return; }
+    if (inv.spaceFor(item) < 1) { this.say("BACKPACK FULL — MAKE ROOM FIRST"); this.audio.ui(); return; }
+    inv.remove("scrap", r.cost);
+    inv.add(item, 1);
+    this.audio.craftClank();
+    this.say(`CRAFTED ${r.name}`, 3);
+    this.selectWeapon(r.weapon); // straight into the hands
+  }
+
+  /** Weapons the player actually owns, in cycle order. */
+  private ownedWeapons(): WeaponId[] {
+    const w: WeaponId[] = ["pulse"];
+    if (this.player.inventory.has("pipe_rifle")) w.push("pipe_rifle");
+    if (this.player.inventory.has("scrap_shotgun")) w.push("scrap_shotgun");
+    return w;
+  }
+
+  selectWeapon(id: WeaponId) {
+    if (id !== "pulse" && !this.player.inventory.has(id)) {
+      this.say("NOT IN YOUR PACK — CRAFT IT AT THE WORKBENCH");
+      this.audio.ui();
+      return;
+    }
+    if (this.currentWeapon === id) return;
+    this.currentWeapon = id;
+    this.refreshWeaponProp();
+    this.audio.ui();
+    this.say(`${WEAPONS[id].name} READY`);
+  }
+
+  cycleWeapon(dir: number) {
+    const owned = this.ownedWeapons();
+    if (owned.length < 2) return;
+    const i = owned.indexOf(this.currentWeapon);
+    this.selectWeapon(owned[(i + dir + owned.length) % owned.length]);
+  }
+
+  /** The equipped gun rides the player model so the HUD badge isn't the only tell. */
+  private refreshWeaponProp() {
+    if (this.weaponProp) {
+      this.player.group.remove(this.weaponProp);
+      this.weaponProp = null;
+    }
+    if (this.currentWeapon === "pulse") return;
+    const prop = this.currentWeapon === "pipe_rifle" ? makeRifleProp() : makeShotgunProp();
+    // right-hand carry, muzzle forward along the body's facing (+Z)
+    prop.position.set(0.38, 1.12, 0.22);
+    this.player.group.add(prop);
+    this.weaponProp = prop;
+  }
+
+  // ── Quality preset (Batch 3 item 17) ──
+
+  /** Live-switch pixel ratio + shadow rig; population budgets apply on restart. */
+  setQuality(p: QualityPreset) {
+    if (p === this.quality) return;
+    this.quality = p;
+    storeQualityPreset(p);
+    const qs = qualitySettings(p);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, qs.maxPixelRatio));
+    this.resize();
+    const sh = this.sky.sun.shadow;
+    sh.mapSize.set(qs.shadowMapSize, qs.shadowMapSize);
+    sh.camera.left = -qs.shadowRadius;
+    sh.camera.right = qs.shadowRadius;
+    sh.camera.top = qs.shadowRadius;
+    sh.camera.bottom = -qs.shadowRadius;
+    sh.camera.updateProjectionMatrix();
+    if (sh.map) { sh.map.dispose(); sh.map = null; } // force re-allocation at the new size
+    this.audio.ui();
+    this.say(`QUALITY: ${p} · POPULATION APPLIES ON RELOAD`, 3);
+  }
+
+  // ── Save / load (Batch 2 item 16) ──
+
+  hasSave(): boolean { return hasSave(); }
+
+  /** Start screen: wipe the save and play from the seeded beginning. */
+  startNewRun() {
+    clearSave();
+    this.runStarted = true;
+    this.saveTimer = 0;
+    this.say("THE WASTELAND WAITS", 2.5);
+  }
+
+  /** Start screen: restore the last autosave. */
+  continueRun() {
+    this.runStarted = true;
+    this.saveTimer = 0;
+    const data = loadSave();
+    if (!data) {
+      this.say("SAVE UNREADABLE — STARTING FRESH", 3);
+      return;
+    }
+    this.applySave(data);
+    this.say("RUN RESTORED — WELCOME BACK", 3);
+  }
+
+  /** Autosave target and tab-hide hook. Silent by design — it is a safety net. */
+  saveNow() {
+    if (!this.runStarted || this.disposed) return;
+    writeSave(this.collectSave());
+  }
+
+  private collectSave(): SaveData {
+    const lootTaken: number[] = [];
+    this.loot.nodes.forEach((n, i) => { if (n.taken) lootTaken.push(i); });
+    return {
+      v: SAVE_VERSION,
+      savedAt: Date.now(),
+      player: {
+        pos: [this.player.position.x, this.player.position.y, this.player.position.z],
+        hp: Math.round(this.player.hp),
+        mode: this.mode,
+      },
+      inventory: this.player.inventory.toJSON(),
+      weapon: this.currentWeapon,
+      quest: this.quest
+        ? { job: this.quest.def.giver as Job, giverName: this.quest.giverName, progress: this.quest.progress }
+        : null,
+      genFuel: this.generator.fuel,
+      timeOfDay: this.sky.timeOfDay,
+      nightIndex: this.nightIndex,
+      kills: this.kills,
+      lootTaken,
+    };
+  }
+
+  private applySave(d: SaveData) {
+    // Vehicles and the mech re-dock at their seeded spots, so the mode always
+    // restores as FOOT wherever the player was standing.
+    this.player.position.set(d.player.pos[0], d.player.pos[1], d.player.pos[2]);
+    this.player.velocity.set(0, 0, 0);
+    this.player.hp = Math.min(this.player.maxHp, Math.max(1, d.player.hp));
+    this.mode = "FOOT";
+    this.currentVehicle = null;
+    this.mechBayOpen = false;
+    this.player.group.visible = !this.firstPerson;
+
+    this.player.inventory.slots = Inventory.fromJSON(d.inventory).slots;
+    const w = d.weapon;
+    this.currentWeapon =
+      (w === "pipe_rifle" || w === "scrap_shotgun") && this.player.inventory.has(w) ? w : "pulse";
+    this.refreshWeaponProp();
+
+    this.quest =
+      d.quest && QUESTS[d.quest.job]
+        ? { def: QUESTS[d.quest.job], giverName: d.quest.giverName, progress: Math.max(0, d.quest.progress) }
+        : null;
+
+    this.generator.fuel = THREE.MathUtils.clamp(d.genFuel ?? 0, 0, 3);
+    this.sky.setTime(d.timeOfDay);
+    this.nightIndex = Math.max(0, Math.floor(d.nightIndex ?? 0));
+    // Sync the edge detector so restoring at night doesn't re-trigger the count.
+    this.wasNight = this.sky.nightness > 0.5;
+    this.kills = Math.max(0, Math.floor(d.kills ?? 0));
+
+    // Loot nodes rebuild in the same seeded order every boot, so indexes are
+    // stable marks of what was already searched.
+    if (Array.isArray(d.lootTaken)) {
+      for (const i of d.lootTaken) {
+        const n = this.loot.nodes[i];
+        if (n && !n.taken) this.loot.take(n);
+      }
+    }
+  }
+
   /** Manual dev-mode latch, independent of the inspection layer. */
   toggleDevMode() {
     this.devManual = !this.devManual;
@@ -521,16 +831,24 @@ export class Game {
   // ── Interactions: board a vehicle (driver seat), climb into the mech ──
   private interact() {
     const p = this.player.position;
+    if (this.craftOpen || this.inventoryOpen) { this.closePanels(); return; } // E also closes panels
     if (this.mode === "FOOT") {
+      const inv = this.player.inventory;
       const node = this.loot.nearest(p);
       if (node) {
-        const got = this.loot.take(node);
         if (node.fuel) {
-          this.player.fuel += 1;
-          this.say(`+1 FUEL CAN · ⛽ ${this.player.fuel}`);
+          if (inv.spaceFor("fuel_can") < 1) { this.say("BACKPACK FULL — NO ROOM FOR THE CAN"); return; }
+          this.loot.take(node);
+          inv.add("fuel_can", 1);
+          this.say(`+1 FUEL CAN · ⛽ ${inv.count("fuel_can")}`);
         } else {
-          this.scrap += got;
-          this.say(`+${got} SCRAP · ${node.label}`);
+          const space = inv.spaceFor("scrap");
+          if (space < 1) { this.say("BACKPACK FULL — NO ROOM FOR SCRAP"); return; }
+          const got = this.loot.take(node);
+          const kept = inv.add("scrap", got);
+          this.say(kept < got
+            ? `+${kept} SCRAP · PACK FULL, LEFT ${got - kept} BEHIND`
+            : `+${got} SCRAP · ${node.label}`);
         }
         this.audio.pickup();
         this.fx.salvageBurst(new THREE.Vector3(node.pos.x, node.pos.y + 0.5, node.pos.z));
@@ -540,8 +858,8 @@ export class Game {
       // Feeding the generator is an E-interaction like everything else — same
       // key, same range test, one owner.
       if (this.generator.near(p)) {
-        if (this.player.fuel > 0) {
-          this.player.fuel -= 1;
+        if (inv.count("fuel_can") > 0) {
+          inv.remove("fuel_can", 1);
           this.generator.feed();
           this.say(`GENERATOR FUELED · ${this.generator.fuel.toFixed(1)} CANS`);
           this.audio.build();
@@ -554,6 +872,14 @@ export class Game {
       const nh = this.nearestHelper(p);
       if (nh) {
         this.questTalk(nh);
+        return;
+      }
+      // Workbench (item 14): E opens the crafting menu. The prop is looked up
+      // by registry role at runtime, so if the world hasn't shipped one yet the
+      // Homestead centre itself counts as the bench — a fallback, not an edit.
+      // Checked AFTER the helpers: their talk radius sits inside the fallback's.
+      if (this.nearWorkbench(p)) {
+        this.openCraft();
         return;
       }
       let nearest: Vehicle | null = null;
@@ -606,17 +932,18 @@ export class Game {
   /** What the interact prompt says while standing next to a quest NPC. */
   private questPrompt(h: Helper): string {
     const def = QUESTS[h.job];
+    const inv = this.player.inventory;
     if (!this.quest) return `${h.name}: ACCEPT "${def.title}"`;
     if (this.quest.def.giver !== h.job) return `${h.name} — FINISH ${this.quest.giverName}'S ERRAND FIRST`;
     if (questComplete(this.quest)) return `${h.name}: TURN IN "${def.title}"`;
     const q = this.quest;
     switch (def.kind) {
       case "fuel":
-        return this.player.fuel > 0
+        return inv.count("fuel_can") > 0
           ? `${h.name}: DEPOSIT FUEL (${q.progress}/${def.target})`
           : `${h.name}: BRING FUEL CANS (${q.progress}/${def.target})`;
       case "scrap":
-        return this.scrap > 0
+        return inv.count("scrap") > 0
           ? `${h.name}: DEPOSIT SCRAP (${q.progress}/${def.target})`
           : `${h.name}: BRING SCRAP (${q.progress}/${def.target})`;
       default:
@@ -627,6 +954,7 @@ export class Game {
   /** E pressed next to a helper: accept → deposit → turn in. */
   private questTalk(h: Helper) {
     const def = QUESTS[h.job];
+    const inv = this.player.inventory;
     if (!this.quest) {
       this.quest = { def, giverName: h.name, progress: 0 };
       this.say(`QUEST — ${def.title}: ${def.objective.toUpperCase()} 0/${def.target}`, 3.2);
@@ -639,8 +967,8 @@ export class Game {
     }
     const q = this.quest;
     if (questComplete(q)) {
-      if (def.reward.scrap) this.scrap += def.reward.scrap;
-      if (def.reward.fuel) this.player.fuel += def.reward.fuel;
+      if (def.reward.scrap) inv.add("scrap", def.reward.scrap);
+      if (def.reward.fuel) inv.add("fuel_can", def.reward.fuel);
       this.say(`QUEST COMPLETE — ${def.rewardText}`);
       this.audio.pickup();
       this.quest = null;
@@ -649,16 +977,18 @@ export class Game {
     // Deposits hand over as much as the player carries in one press; the quest
     // store is separate from the generator tank, so the two never fight.
     if (def.kind === "fuel") {
-      if (this.player.fuel <= 0) { this.say("NO FUEL CANS TO GIVE"); return; }
-      const n = Math.min(def.target - q.progress, this.player.fuel);
-      this.player.fuel -= n;
+      const carried = inv.count("fuel_can");
+      if (carried <= 0) { this.say("NO FUEL CANS TO GIVE"); return; }
+      const n = Math.min(def.target - q.progress, carried);
+      inv.remove("fuel_can", n);
       q.progress += n;
       this.say(`DEPOSITED ${n} FUEL · ${q.progress}/${def.target}`);
       this.audio.build();
     } else if (def.kind === "scrap") {
-      if (this.scrap <= 0) { this.say("NO SCRAP TO GIVE"); return; }
-      const n = Math.min(def.target - q.progress, this.scrap);
-      this.scrap -= n;
+      const carried = inv.count("scrap");
+      if (carried <= 0) { this.say("NO SCRAP TO GIVE"); return; }
+      const n = Math.min(def.target - q.progress, carried);
+      inv.remove("scrap", n);
       q.progress += n;
       this.say(`DEPOSITED ${n} SCRAP · ${q.progress}/${def.target}`);
       this.audio.build();
@@ -789,40 +1119,58 @@ export class Game {
     // Rate limit: without it a click-spam or a held fire button fires every frame,
     // which scales damage with refresh rate.
     if (this.attackCooldown > 0) return;
-    this.attackCooldown = this.mode === "MECH" ? 0.62 : 0.17;
+    const w = this.mode === "MECH" ? null : WEAPONS[this.currentWeapon];
+    this.attackCooldown = this.mode === "MECH" ? 0.62 : w!.cooldown;
     const origin = this.mode === "MECH" ? this.mech.group.position.clone().add(new THREE.Vector3(0, 3, 0)) : this.camera.position.clone();
-    const dir = this.mode === "MECH"
+    const baseDir = this.mode === "MECH"
       ? new THREE.Vector3(Math.sin(this.player.camYaw), 0, Math.cos(this.player.camYaw))
       : this.camera.getWorldDirection(new THREE.Vector3());
-    const ray = new THREE.Raycaster(origin, dir, 0, this.mode === "MECH" ? 7 : 70);
-    let best: { e: Entity; d: number } | null = null;
-    for (const e of this.entities) {
-      if (e.dead || !e.hostile) continue;
-      const hits = ray.intersectObject(e.group, true);
-      if (hits.length && (!best || hits[0].distance < best.d)) best = { e, d: hits[0].distance };
-    }
-    const dmg = this.mode === "MECH" ? this.mech.stats.power : 25;
-    if (this.mode === "MECH") this.audio.mechPunch(); else this.audio.playerShot();
-    this.fx.muzzleFlash(origin.clone().addScaledVector(dir, 0.9), dir);
-    const end = origin.clone().addScaledVector(dir, best ? best.d : 30);
-    this.spawnTracer(origin, end, this.mode === "MECH" ? 0xffaa33 : 0x9fe8ff);
-    if (best) {
-      this.fx.impact(end, dir.clone().negate());
-      best.e.damage(dmg);
-      if (best.e.dead) {
-        this.kills += 1;
-        // Guard's Night Watch errand counts shambler kills made after dark —
-        // wave-night kills qualify, which is rather the point of the job.
-        if (this.quest && this.quest.def.kind === "cull" && !questComplete(this.quest) &&
-            this.sky.nightness > 0.4 &&
-            (best.e instanceof Shambler || best.e instanceof RunnerShambler)) {
-          this.quest.progress += 1;
-          if (questComplete(this.quest)) this.say(`NIGHT WATCH DONE — REPORT TO ${this.quest.giverName}`);
+    const range = this.mode === "MECH" ? 7 : w!.range;
+    const dmg = this.mode === "MECH" ? this.mech.stats.power : w!.damage;
+    const pellets = w ? w.pellets : 1;
+    if (this.mode === "MECH") this.audio.mechPunch();
+    else if (this.currentWeapon === "pipe_rifle") this.audio.rifleShot();
+    else if (this.currentWeapon === "scrap_shotgun") this.audio.shotgunBlast();
+    else this.audio.playerShot();
+    this.fx.muzzleFlash(origin.clone().addScaledVector(baseDir, 0.9), baseDir);
+    for (let pi = 0; pi < pellets; pi++) {
+      // Per-pellet cone spread: each pellet gets its own ray inside `spread`.
+      const dir = baseDir.clone();
+      if (w && w.spread > 0) {
+        dir.x += (Math.random() - 0.5) * 2 * w.spread;
+        dir.y += (Math.random() - 0.5) * 2 * w.spread;
+        dir.z += (Math.random() - 0.5) * 2 * w.spread;
+        dir.normalize();
+      }
+      const ray = new THREE.Raycaster(origin, dir, 0, range);
+      let best: { e: Entity; d: number } | null = null;
+      for (const e of this.entities) {
+        if (e.dead || !e.hostile) continue;
+        const hits = ray.intersectObject(e.group, true);
+        if (hits.length && (!best || hits[0].distance < best.d)) best = { e, d: hits[0].distance };
+      }
+      // One tracer per trigger pull is enough to read; every pellet still
+      // splashes its own impact so the spread is visible where it lands.
+      const end = origin.clone().addScaledVector(dir, best ? best.d : Math.min(30, range));
+      if (pi === 0) this.spawnTracer(origin, end, this.mode === "MECH" ? 0xffaa33 : w!.tracer);
+      if (best) {
+        this.fx.impact(end, dir.clone().negate());
+        best.e.damage(dmg);
+        if (best.e.dead) {
+          this.kills += 1;
+          // Guard's Night Watch errand counts shambler kills made after dark —
+          // wave-night kills qualify, which is rather the point of the job.
+          if (this.quest && this.quest.def.kind === "cull" && !questComplete(this.quest) &&
+              this.sky.nightness > 0.4 &&
+              (best.e instanceof Shambler || best.e instanceof RunnerShambler)) {
+            this.quest.progress += 1;
+            if (questComplete(this.quest)) this.say(`NIGHT WATCH DONE — REPORT TO ${this.quest.giverName}`);
+          }
+          // A kill should leave something behind, or fighting is pure cost.
+          this.loot.addDrop(best.e.group.position, 5 + Math.floor(Math.random() * 9));
+          this.audio.robotDeath();
+          this.fx.wreck(best.e.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)));
         }
-        // A kill should leave something behind, or fighting is pure cost.
-        this.loot.addDrop(best.e.group.position, 5 + Math.floor(Math.random() * 9));
-        this.audio.robotDeath();
-        this.fx.wreck(best.e.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)));
       }
     }
   }
@@ -947,6 +1295,14 @@ export class Game {
     if (this.toastTtl > 0) {
       this.toastTtl -= dt;
       if (this.toastTtl <= 0) this.toast = "";
+    }
+    // Autosave (item 16): real elapsed seconds, only while a run is in play.
+    if (this.runStarted) {
+      this.saveTimer += dt;
+      if (this.saveTimer >= Game.AUTOSAVE_EVERY) {
+        this.saveTimer = 0;
+        this.saveNow();
+      }
     }
     // Sanctuary: the compound patches you up, slowly enough that it is a place to
     // retreat to rather than a reason never to leave.
@@ -1086,16 +1442,18 @@ export class Game {
         : (() => {
             const n = this.loot.nearest(pp);
             if (n) return n.fuel ? "TAKE FUEL CAN" : `SEARCH ${n.label}`;
+            const cans = this.player.inventory.count("fuel_can");
             if (this.generator.near(pp)) {
-              return this.player.fuel > 0 ? `FEED GENERATOR ⛽×${this.player.fuel}` : "GENERATOR · NEEDS FUEL";
+              return cans > 0 ? `FEED GENERATOR ⛽×${cans}` : "GENERATOR · NEEDS FUEL";
             }
             const nh = this.nearestHelper(pp);
             if (nh) return this.questPrompt(nh);
+            if (this.nearWorkbench(pp)) return "OPEN WORKBENCH 🔨";
             return nearestV ? `BOARD ${nearestV.name}` : nearMech ? "PILOT MECH" : null;
           })(),
       kills: this.kills,
-      scrap: this.scrap,
-      fuel: this.player.fuel,
+      scrap: this.player.inventory.count("scrap"),
+      fuel: this.player.inventory.count("fuel_can"),
       genFuel: Math.round(this.generator.fuel * 10) / 10,
       genRunning: this.generator.running,
       genLit: this.generator.lit,
@@ -1136,6 +1494,16 @@ export class Game {
             rewardText: this.quest.def.rewardText,
           }
         : null,
+      inventory: this.player.inventory.toJSON(),
+      inventoryOpen: this.inventoryOpen,
+      craftOpen: this.craftOpen,
+      weapon: {
+        id: this.currentWeapon,
+        name: WEAPONS[this.currentWeapon].name,
+        glyph: WEAPONS[this.currentWeapon].glyph,
+      },
+      hasWeapons: this.ownedWeapons().length > 1,
+      quality: this.quality,
     });
   };
 
@@ -1147,8 +1515,10 @@ export class Game {
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("mousemove", this.onMouseMove);
     window.removeEventListener("mousedown", this.onMouseDown);
+    window.removeEventListener("wheel", this.onWheel);
     window.removeEventListener("pointercancel", this.onPointerCancel);
     window.removeEventListener("blur", this.onBlur);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     this.touch?.dispose();
     this.audio.dispose();
     document.exitPointerLock?.();
