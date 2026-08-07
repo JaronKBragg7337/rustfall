@@ -522,6 +522,17 @@ export class Shambler implements Entity {
   hostile = true;
   dead = false;
   radius = 0.8;
+  /**
+   * Wave-night assault state (item 13). While `assault` is on, the shambler
+   * marches on `waveGoal` instead of the player and ignores the sanctuary
+   * repulsion — wave shamblers are the one hostile allowed to reach the base.
+   * `slowMul`/`veer` are written by the wave manager each frame: lit floodlights
+   * slow the horde and push it sideways.
+   */
+  assault = false;
+  waveGoal = new THREE.Vector3();
+  slowMul = 1;
+  veer = new THREE.Vector3();
   private speed = 1.35;
   private body: Humanoid;
   private moving = 0;
@@ -537,23 +548,27 @@ export class Shambler implements Entity {
   update(dt: number, playerPos: THREE.Vector3) {
     if (this.dead) return;
     const p = this.group.position;
-    const dir = new THREE.Vector3(playerPos.x - p.x, 0, playerPos.z - p.z);
+    const goal = this.assault ? this.waveGoal : playerPos;
+    const dir = new THREE.Vector3(goal.x - p.x, 0, goal.z - p.z);
     const d = dir.length();
-    if (d < 42 && d > 0.6) {
+    if (d < (this.assault ? Infinity : 42) && d > 0.6) {
       dir.normalize();
       const targetYaw = Math.atan2(dir.x, dir.z);
       let dy = targetYaw - this.group.rotation.y;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
       this.group.rotation.y += THREE.MathUtils.clamp(dy, -1.8 * dt, 1.8 * dt);
-      p.addScaledVector(dir, this.speed * dt);
-      this.moving = this.speed;
+      p.addScaledVector(dir, this.speed * this.slowMul * dt);
+      this.moving = this.speed * this.slowMul;
     } else {
       this.moving = THREE.MathUtils.damp(this.moving, 0, 4, dt);
     }
+    // floodlight veer: a sideways push, independent of the pursuit vector
+    p.x += this.veer.x * dt;
+    p.z += this.veer.z * dt;
     this.body.shamble(dt, this.moving);
     clampToWorld(p);
-    keepOutOfSafeZone(p);
+    if (!this.assault) keepOutOfSafeZone(p);
     p.y = heightAt(p.x, p.z);
   }
 
@@ -584,6 +599,11 @@ export class RunnerShambler implements Entity {
   dead = false;
   radius = 0.7;
   onAggro: (() => void) | null = null;
+  /** Wave-night assault state — see Shambler. Same contract, faster legs. */
+  assault = false;
+  waveGoal = new THREE.Vector3();
+  slowMul = 1;
+  veer = new THREE.Vector3();
   /** ~1.6× the player's 7.4 m/s sprint — you cannot simply outrun it. */
   private speed = 11.8;
   private body: Humanoid;
@@ -603,9 +623,10 @@ export class RunnerShambler implements Entity {
   update(dt: number, playerPos: THREE.Vector3) {
     if (this.dead) return;
     const p = this.group.position;
-    const dir = new THREE.Vector3(playerPos.x - p.x, 0, playerPos.z - p.z);
+    const goal = this.assault ? this.waveGoal : playerPos;
+    const dir = new THREE.Vector3(goal.x - p.x, 0, goal.z - p.z);
     const d = dir.length();
-    if (d < 46 && d > 0.7) {
+    if (d < (this.assault ? Infinity : 46) && d > 0.7) {
       if (!this.aggroed) { this.aggroed = true; this.onAggro?.(); }
       dir.normalize();
       // Zig-zag approach: a perpendicular sine sway on top of the pursuit
@@ -620,17 +641,21 @@ export class RunnerShambler implements Entity {
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
       this.group.rotation.y += THREE.MathUtils.clamp(dy, -4.5 * dt, 4.5 * dt);
-      p.x += (mx / ml) * this.speed * dt;
-      p.z += (mz / ml) * this.speed * dt;
-      this.moving = this.speed;
+      const spd = this.speed * this.slowMul;
+      p.x += (mx / ml) * spd * dt;
+      p.z += (mz / ml) * spd * dt;
+      this.moving = spd;
     } else {
       this.moving = THREE.MathUtils.damp(this.moving, 0, 4, dt);
     }
+    // floodlight veer (wave nights)
+    p.x += this.veer.x * dt;
+    p.z += this.veer.z * dt;
     this.body.animate(dt, this.moving, this.speed);
     // deeper hunch than the run cycle gives on its own — the runner's signature
     this.body.chest.rotation.x += 0.28;
     clampToWorld(p);
-    keepOutOfSafeZone(p);
+    if (!this.assault) keepOutOfSafeZone(p);
     p.y = heightAt(p.x, p.z);
   }
 
@@ -645,12 +670,298 @@ export class RunnerShambler implements Entity {
   }
 }
 
+// ─────────────────────────────── FERAL SPORE-BOAR ───────────────────────────────
+// Batch 2, item 15. A 1.9 m quadruped gone septic: flesh (CRV01) over bone
+// (CRV02), a tattered canvas patch (CRV05) fused to one flank, and a crop of
+// spore pustules that throb when the animal is worked up.
+//
+// Form hierarchy: PRIMARY barrel body with shoulder hump · SECONDARY head,
+// tusks, legs · TERTIARY instanced pustules and spine bristles.
+//
+// Behavior: roams the fields on seeded waypoints; a player inside 12 m gets a
+// snort and a full second of ground-pawing (the honest telegraph), then a
+// straight-line 12 m/s charge. A hit damages and knocks the player down; a
+// miss runs past, wheels around, and tries again — up to 3 charges before it
+// loses interest. Like every non-wave hostile it will not enter the sanctuary.
+export class SporeBoar implements Entity {
+  group = new THREE.Group();
+  hp = 70; maxHp = 70;
+  hostile = true;
+  dead = false;
+  radius = 1.2;
+  onSnort: (() => void) | null = null;
+  /** Fired once per charge when the tusks connect; dir is the charge direction. */
+  onHit: ((dir: THREE.Vector3) => void) | null = null;
+  private rng: () => number;
+  private state: "roam" | "paw" | "charge" | "stagger" = "roam";
+  private stateT = 0;
+  private waypoint = new THREE.Vector3();
+  private chargeDir = new THREE.Vector3(0, 0, 1);
+  private chargeLeft = 0;
+  private chargeTravel = 0;
+  private hitThisCharge = false;
+  private cooldown = 0;
+  private moving = 0;
+  private gaitPhase = 0;
+  private bodyPhase: number;
+  private head: THREE.Group;
+  private torso: THREE.Group;
+  private legs: THREE.Group[] = [];
+  private pustuleMat: THREE.MeshStandardMaterial;
+
+  constructor(pos: THREE.Vector3, seed = 3300) {
+    this.rng = makeRng(seed);
+    this.bodyPhase = this.rng() * 6.28;
+
+    const flesh = surface("CRV01", { local: true, tile: 1.1, grime: 0.4, grimeHeight: 0.6 });
+    const bone = surface("CRV02", { local: true, tile: 0.9 });
+    const canvasPatch = surface("CRV05", { local: true, tile: 0.9, grime: 0.3, gamma: 0.8, gain: 1.04 });
+    const hoofMat = M.rubber();
+    const bristleMat = plain(0x2e2a24, 0.9, 0.05);
+
+    // ── primary: barrel body, shoulder hump, rump ──
+    this.torso = new THREE.Group();
+    this.torso.position.y = 0.92;
+    this.torso.add(bev(1.05, 0.78, 1.90, flesh, { pos: [0, 0, 0] }));
+    this.torso.add(bev(1.00, 0.50, 0.80, flesh, { pos: [0, 0.45, 0.45] })); // hump
+    this.torso.add(bev(0.90, 0.40, 0.60, flesh, { pos: [0, 0.30, -0.70] })); // rump
+    // tattered canvas patch fused to the flank — scavenger-camp origin
+    this.torso.add(part(flatBox(0.02, 0.52, 0.72), canvasPatch, { pos: [0.53, 0.02, -0.20], rot: [0, 0, 0.06], shadow: false }));
+    this.torso.add(part(cyl(0.04, 0.07, 0.30, 6), flesh, { pos: [0, 0.10, -1.02], rot: [0.7, 0, 0] })); // tail stub
+    this.group.add(this.torso);
+
+    // ── secondary: head with snout, tusks, ears, ember eyes ──
+    this.head = new THREE.Group();
+    this.head.position.set(0, 0.98, 1.05);
+    this.head.add(bev(0.55, 0.50, 0.62, flesh, { pos: [0, 0, 0.10] }));
+    this.head.add(bev(0.34, 0.30, 0.34, flesh, { pos: [0, -0.10, 0.50] })); // snout
+    this.head.add(part(cyl(0.09, 0.11, 0.10, 8), hoofMat, { pos: [0, -0.08, 0.68] })); // wet nose
+    for (const sx of [-1, 1]) {
+      // tusks: two angled bone segments per side, curving up and out
+      this.head.add(part(cyl(0.020, 0.050, 0.30, 7), bone, { pos: [sx * 0.20, -0.16, 0.50], rot: [1.1, 0, sx * 0.4] }));
+      this.head.add(part(cyl(0.010, 0.020, 0.18, 6), bone, { pos: [sx * 0.28, -0.02, 0.62], rot: [0.6, 0, sx * 0.6] }));
+      this.head.add(part(cyl(0.03, 0.03, 0.02, 8), emissive(0xff4418, 2.2), { pos: [sx * 0.20, 0.08, 0.42], rot: [Math.PI / 2, 0, sx * 0.5], shadow: false }));
+      this.head.add(part(flatBox(0.05, 0.16, 0.10), flesh, { pos: [sx * 0.24, 0.30, -0.05], rot: [0.2, 0, sx * 0.4] }));
+    }
+    this.group.add(this.head);
+
+    // ── secondary: four legs, flesh upper over a bare bone shin ──
+    for (const [sx, sz] of [[-0.36, 0.60], [0.36, 0.60], [-0.36, -0.62], [0.36, -0.62]] as Array<[number, number]>) {
+      const leg = new THREE.Group();
+      leg.position.set(sx, 0.82, sz);
+      leg.add(bev(0.22, 0.50, 0.26, flesh, { pos: [0, -0.22, 0] }));
+      const knee = new THREE.Group();
+      knee.position.set(0, -0.44, 0);
+      leg.add(knee);
+      knee.add(part(cyl(0.07, 0.10, 0.32, 8), bone, { pos: [0, -0.16, 0] }));
+      knee.add(part(cyl(0.09, 0.10, 0.09, 8), hoofMat, { pos: [0, -0.34, 0] }));
+      this.legs.push(leg);
+      this.group.add(leg);
+    }
+
+    // ── tertiary: instanced pustules on the flanks, bristles along the spine ──
+    this.pustuleMat = new THREE.MeshStandardMaterial({
+      color: 0x8fa04a, emissive: 0x5a7a2a, emissiveIntensity: 0.9, roughness: 0.55, metalness: 0,
+    });
+    const pustuleGeo = new THREE.SphereGeometry(0.06, 8, 6);
+    const pustules = new THREE.InstancedMesh(pustuleGeo, this.pustuleMat, 14);
+    {
+      const m4 = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      const s = new THREE.Vector3();
+      const v = new THREE.Vector3();
+      for (let i = 0; i < 14; i++) {
+        const side = i % 2 === 0 ? -1 : 1;
+        v.set(
+          side * (0.50 + this.rng() * 0.06),
+          0.15 + this.rng() * 0.35,
+          -0.75 + this.rng() * 1.35
+        );
+        const k = 0.6 + this.rng() * 0.9;
+        s.set(k, k * (0.7 + this.rng() * 0.4), k);
+        m4.compose(v, q, s);
+        pustules.setMatrixAt(i, m4);
+      }
+      pustules.instanceMatrix.needsUpdate = true;
+      pustules.castShadow = true;
+      this.torso.add(pustules);
+    }
+    const bristleGeo = flatBox(0.035, 0.20, 0.06);
+    const bristles = new THREE.InstancedMesh(bristleGeo, bristleMat, 9);
+    {
+      const m4 = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      const e = new THREE.Euler();
+      const s = new THREE.Vector3(1, 1, 1);
+      const v = new THREE.Vector3();
+      for (let i = 0; i < 9; i++) {
+        const t = i / 8;
+        v.set(0, 0.62 + Math.sin(t * Math.PI) * 0.14, 0.75 - t * 1.45);
+        e.set(-0.45, 0, (this.rng() - 0.5) * 0.3);
+        q.setFromEuler(e);
+        m4.compose(v, q, s);
+        bristles.setMatrixAt(i, m4);
+      }
+      bristles.instanceMatrix.needsUpdate = true;
+      bristles.castShadow = true;
+      this.torso.add(bristles);
+    }
+
+    this.group.position.copy(pos);
+    shadowed(this.group);
+    this.pickWaypoint();
+    registerAsset("feral spore-boar", this.group, "BST");
+  }
+
+  private pickWaypoint() {
+    const p = this.group.position;
+    for (let i = 0; i < 8; i++) {
+      const x = p.x + (this.rng() - 0.5) * 50;
+      const z = p.z + (this.rng() - 0.5) * 50;
+      if (safeZoneFactor(x, z) > 0) continue;
+      const L = WORLD.SIZE / 2 - 6;
+      this.waypoint.set(THREE.MathUtils.clamp(x, -L, L), 0, THREE.MathUtils.clamp(z, -L, L));
+      return;
+    }
+    this.waypoint.set(p.x, 0, p.z);
+  }
+
+  private faceToward(dir: THREE.Vector3, turn: number, dt: number) {
+    const targetYaw = Math.atan2(dir.x, dir.z);
+    let dy = targetYaw - this.group.rotation.y;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    this.group.rotation.y += THREE.MathUtils.clamp(dy, -turn * dt, turn * dt);
+  }
+
+  update(dt: number, playerPos: THREE.Vector3) {
+    if (this.dead) return;
+    const p = this.group.position;
+    const distP = Math.hypot(playerPos.x - p.x, playerPos.z - p.z);
+    this.bodyPhase += dt;
+    this.cooldown = Math.max(0, this.cooldown - dt);
+
+    switch (this.state) {
+      case "roam": {
+        if (distP < 12 && this.cooldown <= 0) {
+          // snort + paw: the warning before the violence
+          this.state = "paw";
+          this.stateT = 1.0;
+          this.chargeLeft = 3;
+          this.onSnort?.();
+          break;
+        }
+        const dir = new THREE.Vector3(this.waypoint.x - p.x, 0, this.waypoint.z - p.z);
+        if (dir.length() < 1.5) {
+          this.pickWaypoint();
+        } else {
+          dir.normalize();
+          this.faceToward(dir, 3.2, dt);
+          p.addScaledVector(dir, 2.2 * dt);
+          this.moving = 2.2;
+        }
+        break;
+      }
+      case "paw": {
+        // square up to the player and scrape — ~1 s of readable telegraph
+        const dir = new THREE.Vector3(playerPos.x - p.x, 0, playerPos.z - p.z);
+        if (dir.lengthSq() > 1e-6) this.faceToward(dir.normalize(), 6, dt);
+        this.stateT -= dt;
+        this.moving = THREE.MathUtils.damp(this.moving, 0, 8, dt);
+        if (this.stateT <= 0) {
+          this.state = "charge";
+          this.chargeDir.set(playerPos.x - p.x, 0, playerPos.z - p.z).normalize();
+          this.chargeTravel = 0;
+          this.hitThisCharge = false;
+          this.chargeLeft -= 1;
+        }
+        break;
+      }
+      case "charge": {
+        this.group.rotation.y = Math.atan2(this.chargeDir.x, this.chargeDir.z);
+        p.addScaledVector(this.chargeDir, 12 * dt);
+        this.chargeTravel += 12 * dt;
+        this.moving = 12;
+        if (!this.hitThisCharge && distP < 1.4) {
+          this.hitThisCharge = true;
+          this.onHit?.(this.chargeDir.clone());
+          // got its gore — shakes it off, then loses interest for a while
+          this.state = "stagger";
+          this.stateT = 1.2;
+          this.cooldown = 5;
+        } else if (this.chargeTravel > 22) {
+          // ran past — wheel around for another attempt
+          this.state = "stagger";
+          this.stateT = 0.8;
+        }
+        break;
+      }
+      case "stagger": {
+        this.stateT -= dt;
+        this.moving = THREE.MathUtils.damp(this.moving, 0, 6, dt);
+        if (this.stateT <= 0) {
+          if (this.chargeLeft > 0 && distP < 20 && this.cooldown <= 0) {
+            this.state = "paw";
+            this.stateT = 0.7; // shorter telegraph on the follow-up charges
+          } else {
+            this.state = "roam";
+            this.cooldown = Math.max(this.cooldown, 4);
+            this.pickWaypoint();
+          }
+        }
+        break;
+      }
+    }
+
+    // ── gait ──
+    const gait = Math.min(1, this.moving / 12);
+    this.gaitPhase += dt * (2.4 + this.moving * 1.7);
+    const swing = (0.30 + gait * 0.40) * (this.moving > 0.1 ? 1 : 0);
+    if (this.state === "paw") {
+      // one front hoof rakes the dirt, head drops — the whole silhouette warns
+      this.legs[1].rotation.x = -0.9 + Math.sin(this.bodyPhase * 14) * 0.5;
+      this.legs[0].rotation.x = THREE.MathUtils.damp(this.legs[0].rotation.x, 0.15, 8, dt);
+      this.legs[2].rotation.x = THREE.MathUtils.damp(this.legs[2].rotation.x, 0, 8, dt);
+      this.legs[3].rotation.x = THREE.MathUtils.damp(this.legs[3].rotation.x, 0, 8, dt);
+      this.head.rotation.x = THREE.MathUtils.damp(this.head.rotation.x, 0.55, 8, dt);
+    } else {
+      // diagonal pairs, like a real trot
+      const s = Math.sin(this.gaitPhase);
+      this.legs[0].rotation.x = s * swing;
+      this.legs[3].rotation.x = s * swing;
+      this.legs[1].rotation.x = -s * swing;
+      this.legs[2].rotation.x = -s * swing;
+      const headTarget = this.state === "charge" ? 0.5 : 0.06 + Math.sin(this.bodyPhase * 1.7) * 0.05;
+      this.head.rotation.x = THREE.MathUtils.damp(this.head.rotation.x, headTarget, 8, dt);
+    }
+    // pustules throb harder while the animal is winding up
+    this.pustuleMat.emissiveIntensity =
+      0.75 + Math.sin(this.bodyPhase * 2.6) * 0.45 + (this.state === "paw" ? 0.6 : 0);
+
+    clampToWorld(p);
+    keepOutOfSafeZone(p); // not a wave hostile — the sanctuary holds
+    p.y = heightAt(p.x, p.z);
+  }
+
+  damage(n: number) {
+    if (this.dead) return;
+    this.hp -= n;
+    if (this.hp <= 0) {
+      this.dead = true;
+      this.group.rotation.z = Math.PI / 2.1;
+      this.group.position.y = heightAt(this.group.position.x, this.group.position.z) + 0.3;
+      this.pustuleMat.emissiveIntensity = 0.1;
+    }
+  }
+}
+
 // ─────────────────────────────── NPC HELPER ───────────────────────────────
 export type Job = "FARMER" | "SCRAPPER" | "GUARD";
 
 export class Helper {
   group = new THREE.Group();
   job: Job;
+  readonly name: string;
   private stations: THREE.Vector3[];
   private idx = 0;
   private wait = 0;
@@ -659,6 +970,7 @@ export class Helper {
 
   constructor(pos: THREE.Vector3, job: Job, stations: THREE.Vector3[], name: string) {
     this.job = job;
+    this.name = name;
     this.stations = stations;
     this.body = new Humanoid(STYLES[job]);
     this.group.add(this.body.group);

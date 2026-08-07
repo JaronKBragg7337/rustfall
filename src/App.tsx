@@ -14,6 +14,7 @@ const INITIAL_HUD: HudState = {
   kills: 0, scrap: 0, fuel: 0, genFuel: 0, genRunning: false, genLit: false, vehicleName: null, seatName: null, mechParts: null, mechStats: null,
   mechBayOpen: false, issues: 0, address: "0, 0, 0", nearby: [], muted: false, timeOfDay: 0.42, clock: "10:04", dust: 0, timeFrozen: false, toast: "", lootLeft: 0,
   firstPerson: false, devMode: false, safe: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
+  waveNight: false, quest: null,
 };
 
 /**
@@ -189,7 +190,37 @@ export default function App() {
             </div>
           </div>
         )}
+        {/* fetch quest card: giver, objective with live progress, turn-in state */}
+        {hud.quest && (
+          <div className="mt-1.5 sm:mt-2 rounded border border-amber-700/70 bg-zinc-950/85 px-2 py-1.5 sm:px-3 sm:py-2 w-44 sm:w-64">
+            <div className="text-[8px] sm:text-[9px] tracking-widest text-zinc-500">✦ {hud.quest.giver} · {hud.quest.job}</div>
+            <div className="text-[10px] sm:text-[11px] font-bold tracking-widest text-amber-200 mt-0.5">{hud.quest.title}</div>
+            <div className="text-[9px] sm:text-[10px] text-zinc-300 mt-0.5">
+              {hud.quest.objective} · {hud.quest.progress}/{hud.quest.target}
+            </div>
+            <div className="mt-1 h-1 bg-zinc-800/80 border border-zinc-700">
+              <div className="h-full bg-amber-500 transition-[width] duration-150"
+                style={{ width: `${Math.min(100, (hud.quest.progress / hud.quest.target) * 100)}%` }} />
+            </div>
+            <div className={`text-[8px] sm:text-[9px] tracking-widest mt-1 ${
+              hud.quest.progress >= hud.quest.target ? "text-emerald-400" : "text-zinc-500"}`}>
+              {hud.quest.progress >= hud.quest.target
+                ? `DONE — RETURN TO ${hud.quest.giver}`
+                : `REWARD ${hud.quest.rewardText}`}
+            </div>
+          </div>
+        )}
       </div>
+      )}
+
+      {/* ── WAVE NIGHT banner: the horde is marching on the base ── */}
+      {hud.waveNight && !hud.cinematic && (
+        <div className="absolute top-10 sm:top-16 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+          <div className="rounded border border-red-700/80 bg-red-950/80 px-4 py-1.5 sm:px-6 sm:py-2
+                          text-red-200 text-[11px] sm:text-sm font-black tracking-[0.3em] animate-pulse whitespace-nowrap">
+            ⚠ WAVE NIGHT ⚠
+          </div>
+        </div>
       )}
 
       {/* ── settings ── */}

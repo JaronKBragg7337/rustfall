@@ -1,9 +1,10 @@
 // RUSTFALL engine — scene, loop, input, combat, interactions, layer switching.
 import * as THREE from "./three";
-import { makeRng, QUALITY, IS_TOUCH, safeZoneFactor, assetRegistry } from "./constants";
+import { makeRng, QUALITY, IS_TOUCH, SAFE_ZONE, safeZoneFactor, assetRegistry } from "./constants";
 import { loadAtlases } from "./textures";
 import { buildWorld } from "./world";
-import { Robot, Shambler, RunnerShambler, StalkerBot, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity } from "./entities";
+import { Robot, Shambler, RunnerShambler, StalkerBot, SporeBoar, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity } from "./entities";
+import { QUESTS, questComplete, type ActiveQuest } from "./quests";
 import { Generator } from "./generator";
 import { Player, FEEL, type MoveInput } from "./player";
 import { BuildMode, PIECES } from "./build";
@@ -56,6 +57,18 @@ export interface HudState {
   shotName: string;
   shotCaption: string;
   shotProgress: number;
+  /** Batch 2 item 13: true while a wave-night assault is marching on the base. */
+  waveNight: boolean;
+  /** Batch 2 item 11: the one active fetch quest, for the HUD card. */
+  quest: {
+    giver: string;
+    job: string;
+    title: string;
+    objective: string;
+    progress: number;
+    target: number;
+    rewardText: string;
+  } | null;
 }
 
 interface Ring { obj: THREE.Mesh; t: number; }
@@ -120,6 +133,14 @@ export class Game {
   private dustField!: DustField;
   private stepPhase = 0;
   private wasGrounded = true;
+  // ── Batch 2 state ──
+  /** Nights elapsed; a wave assaults the base every 3rd night (item 13). */
+  private nightIndex = 0;
+  private wasNight = false;
+  private waveActive = false;
+  private waveSet = new Set<Shambler | RunnerShambler>();
+  /** The one active fetch quest (item 11). */
+  private quest: ActiveQuest | null = null;
 
   onHud: (h: HudState) => void = () => {};
   onTouch: (t: TouchState | null) => void = () => {};
@@ -265,6 +286,26 @@ export class Game {
       };
       this.entities.push(s);
       this.scene.add(s.group);
+    }
+    // Feral spore-boars (item 15): 2–3 roaming the fields, none in the sanctuary.
+    for (let i = 0; i < (QUALITY.mobile ? 2 : 3); i++) {
+      let pos = spawn(30, 80);
+      for (let tries = 0; tries < 12 && safeZoneFactor(pos.x, pos.z) > 0; tries++) pos = spawn(30, 80);
+      const b = new SporeBoar(pos, 3300 + i * 71);
+      b.onSnort = () => this.audio.boarSnort();
+      b.onHit = (dir) => {
+        // tusk hit: damage plus a real knockdown — the player is thrown
+        this.damagePlayer(16);
+        this.player.velocity.x += dir.x * 9;
+        this.player.velocity.z += dir.z * 9;
+        if (this.player.velocity.y < 3.2) this.player.velocity.y = 3.2;
+        this.player.grounded = false;
+        this.audio.boarImpact();
+        this.audio.hurt();
+        this.fx.impact(this.player.position.clone().add(new THREE.Vector3(0, 1, 0)), dir.clone().negate());
+      };
+      this.entities.push(b);
+      this.scene.add(b.group);
     }
     const bx = -6, bz = -44;
     this.helpers.push(
@@ -509,6 +550,12 @@ export class Game {
         }
         return;
       }
+      // Fetch quests (item 11): talk to a base NPC, same E-interaction contract.
+      const nh = this.nearestHelper(p);
+      if (nh) {
+        this.questTalk(nh);
+        return;
+      }
       let nearest: Vehicle | null = null;
       let nd = 4.5;
       for (const v of this.vehicles) {
@@ -541,6 +588,156 @@ export class Game {
 
   cycleMechPart(slot: "torso" | "arms" | "legs") {
     this.mech.cyclePart(slot);
+  }
+
+  // ── Fetch quests (item 11): accept, deposit, turn in — all through E ──
+
+  /** Closest base NPC within talking range. */
+  private nearestHelper(p: THREE.Vector3, r = 3.2): Helper | null {
+    let best: Helper | null = null;
+    let bd = r;
+    for (const h of this.helpers) {
+      const d = Math.hypot(h.group.position.x - p.x, h.group.position.z - p.z);
+      if (d < bd) { bd = d; best = h; }
+    }
+    return best;
+  }
+
+  /** What the interact prompt says while standing next to a quest NPC. */
+  private questPrompt(h: Helper): string {
+    const def = QUESTS[h.job];
+    if (!this.quest) return `${h.name}: ACCEPT "${def.title}"`;
+    if (this.quest.def.giver !== h.job) return `${h.name} — FINISH ${this.quest.giverName}'S ERRAND FIRST`;
+    if (questComplete(this.quest)) return `${h.name}: TURN IN "${def.title}"`;
+    const q = this.quest;
+    switch (def.kind) {
+      case "fuel":
+        return this.player.fuel > 0
+          ? `${h.name}: DEPOSIT FUEL (${q.progress}/${def.target})`
+          : `${h.name}: BRING FUEL CANS (${q.progress}/${def.target})`;
+      case "scrap":
+        return this.scrap > 0
+          ? `${h.name}: DEPOSIT SCRAP (${q.progress}/${def.target})`
+          : `${h.name}: BRING SCRAP (${q.progress}/${def.target})`;
+      default:
+        return `${h.name}: ${q.progress}/${def.target} SHAMBLERS DOWN`;
+    }
+  }
+
+  /** E pressed next to a helper: accept → deposit → turn in. */
+  private questTalk(h: Helper) {
+    const def = QUESTS[h.job];
+    if (!this.quest) {
+      this.quest = { def, giverName: h.name, progress: 0 };
+      this.say(`QUEST — ${def.title}: ${def.objective.toUpperCase()} 0/${def.target}`, 3.2);
+      this.audio.ui();
+      return;
+    }
+    if (this.quest.def.giver !== h.job) {
+      this.say(`FINISH ${this.quest.giverName}'S ERRAND FIRST`);
+      return;
+    }
+    const q = this.quest;
+    if (questComplete(q)) {
+      if (def.reward.scrap) this.scrap += def.reward.scrap;
+      if (def.reward.fuel) this.player.fuel += def.reward.fuel;
+      this.say(`QUEST COMPLETE — ${def.rewardText}`);
+      this.audio.pickup();
+      this.quest = null;
+      return;
+    }
+    // Deposits hand over as much as the player carries in one press; the quest
+    // store is separate from the generator tank, so the two never fight.
+    if (def.kind === "fuel") {
+      if (this.player.fuel <= 0) { this.say("NO FUEL CANS TO GIVE"); return; }
+      const n = Math.min(def.target - q.progress, this.player.fuel);
+      this.player.fuel -= n;
+      q.progress += n;
+      this.say(`DEPOSITED ${n} FUEL · ${q.progress}/${def.target}`);
+      this.audio.build();
+    } else if (def.kind === "scrap") {
+      if (this.scrap <= 0) { this.say("NO SCRAP TO GIVE"); return; }
+      const n = Math.min(def.target - q.progress, this.scrap);
+      this.scrap -= n;
+      q.progress += n;
+      this.say(`DEPOSITED ${n} SCRAP · ${q.progress}/${def.target}`);
+      this.audio.build();
+    } else {
+      this.say(`${q.progress}/${def.target} — THE NIGHT ISN'T SAFE YET`);
+    }
+  }
+
+  // ── Wave night (item 13): every 3rd night the horde marches on the base ──
+
+  /**
+   * Spawn the wave at the map edge, aimed at the compound. Deterministic: the
+   * size, mix and approach bearing all come from an RNG seeded by the night
+   * number, so the same save-clock always produces the same assault.
+   */
+  private startWave() {
+    const rng = makeRng(5500 + this.nightIndex * 131);
+    const total = QUALITY.mobile ? 4 + Math.floor(rng() * 3) : 6 + Math.floor(rng() * 5);
+    const runners = Math.max(1, Math.round(total / 3));
+    const baseAng = rng() * Math.PI * 2;
+    for (let i = 0; i < total; i++) {
+      const a = baseAng + (rng() - 0.5) * 1.1; // a loose arc, not a ring
+      const r = 86 + rng() * 8;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      const pos = new THREE.Vector3(x, heightAt(x, z), z);
+      const zed = i < runners ? new RunnerShambler(pos, 200 + i) : new Shambler(pos);
+      zed.assault = true;
+      zed.waveGoal.set(
+        SAFE_ZONE.x + (rng() - 0.5) * 9, 0,
+        SAFE_ZONE.z + (rng() - 0.5) * 9
+      );
+      if (zed instanceof RunnerShambler) zed.onAggro = () => this.audio.runnerScreech();
+      this.entities.push(zed);
+      this.scene.add(zed.group);
+      this.waveSet.add(zed);
+    }
+    this.waveActive = true;
+    this.audio.waveHorn();
+    this.say("WAVE NIGHT — THE HORDE COMES FOR THE BASE", 4);
+  }
+
+  /** Dawn or a wiped wave: survivors revert to ordinary shamblers. */
+  private endWave() {
+    for (const e of this.waveSet) {
+      e.assault = false;
+      e.slowMul = 1;
+      e.veer.set(0, 0, 0);
+    }
+    this.waveSet.clear();
+    this.waveActive = false;
+  }
+
+  /**
+   * Lit floodlights repel the wave: inside a lamp's pool the horde slows to a
+   * creep and is pushed sideways. Written BEFORE the entities move so the same
+   * frame's positions respond to the light.
+   */
+  private applyWaveRepulsion() {
+    const lamps = this.generator.lamps();
+    const R = 7.5; // repulsion radius, a shade under a pole's useful throw
+    for (const s of this.waveSet) {
+      let slow = 1, vx = 0, vz = 0;
+      if (!s.dead) {
+        for (const l of lamps) {
+          const dx = s.group.position.x - l.x;
+          const dz = s.group.position.z - l.z;
+          const d = Math.hypot(dx, dz);
+          if (d < R) {
+            slow = Math.min(slow, 0.45);
+            const w = (1 - d / R) * 6;
+            vx += (dx / (d || 1e-4)) * w;
+            vz += (dz / (d || 1e-4)) * w;
+          }
+        }
+      }
+      s.slowMul = slow;
+      s.veer.set(vx, 0, vz);
+    }
   }
 
   setLayer(mode: LayerMode) {
@@ -614,6 +811,14 @@ export class Game {
       best.e.damage(dmg);
       if (best.e.dead) {
         this.kills += 1;
+        // Guard's Night Watch errand counts shambler kills made after dark —
+        // wave-night kills qualify, which is rather the point of the job.
+        if (this.quest && this.quest.def.kind === "cull" && !questComplete(this.quest) &&
+            this.sky.nightness > 0.4 &&
+            (best.e instanceof Shambler || best.e instanceof RunnerShambler)) {
+          this.quest.progress += 1;
+          if (questComplete(this.quest)) this.say(`NIGHT WATCH DONE — REPORT TO ${this.quest.giverName}`);
+        }
         // A kill should leave something behind, or fighting is pure cost.
         this.loot.addDrop(best.e.group.position, 5 + Math.floor(Math.random() * 9));
         this.audio.robotDeath();
@@ -703,6 +908,7 @@ export class Game {
     }
 
     // entities think, work, and hunt; contact hurts
+    if (this.waveActive) this.applyWaveRepulsion();
     const pp = this.player.position;
     for (const e of this.entities) {
       e.update(dt, pp);
@@ -802,6 +1008,24 @@ export class Game {
     if (!this.timeFrozen) {
       this.sky.setTime(this.sky.timeOfDay + dt / this.dayLength);
     }
+    // Wave-night scheduling rides the in-game clock (the same `nightness` the
+    // generator reads), never wall time: every 3rd nightfall starts a wave,
+    // dawn or a wiped horde ends it.
+    {
+      const night = this.sky.nightness > 0.5;
+      if (night && !this.wasNight) {
+        this.nightIndex += 1;
+        if (this.nightIndex % 3 === 0) this.startWave();
+      } else if (!night && this.wasNight && this.waveActive) {
+        this.endWave();
+      }
+      this.wasNight = night;
+      if (this.waveActive) {
+        let alive = 0;
+        for (const e of this.waveSet) if (!e.dead) alive++;
+        if (alive === 0) this.endWave();
+      }
+    }
     this.weatherTimer -= dt;
     if (this.weatherTimer <= 0) {
       // Storms are occasional and short relative to clear weather, so they read
@@ -865,6 +1089,8 @@ export class Game {
             if (this.generator.near(pp)) {
               return this.player.fuel > 0 ? `FEED GENERATOR ⛽×${this.player.fuel}` : "GENERATOR · NEEDS FUEL";
             }
+            const nh = this.nearestHelper(pp);
+            if (nh) return this.questPrompt(nh);
             return nearestV ? `BOARD ${nearestV.name}` : nearMech ? "PILOT MECH" : null;
           })(),
       kills: this.kills,
@@ -898,6 +1124,18 @@ export class Game {
       shotName: this.cinema.active ? this.cinema.shot.name : "",
       shotCaption: this.cinema.active ? this.cinema.shot.caption : "",
       shotProgress: this.cinema.active ? this.cinema.progress : 0,
+      waveNight: this.waveActive,
+      quest: this.quest
+        ? {
+            giver: this.quest.giverName,
+            job: this.quest.def.giver,
+            title: this.quest.def.title,
+            objective: this.quest.def.objective,
+            progress: this.quest.progress,
+            target: this.quest.def.target,
+            rewardText: this.quest.def.rewardText,
+          }
+        : null,
     });
   };
 

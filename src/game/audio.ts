@@ -273,6 +273,48 @@ export class Audio {
     this.burst({ dur: 0.5, type: "bandpass", freq: 2100, q: 2.5, gain: 0.1 });
   }
 
+  /**
+   * Wave-night horn — a distant two-note blast with a slow swell, answered once.
+   * Slow attack is the difference between a horn and a beep, so this builds its
+   * own envelopes instead of using the quick-attack `tone` helper.
+   */
+  waveHorn() {
+    if (!this.started || this.muted) return;
+    const ctx = this.ctx!;
+    const t0 = ctx.currentTime;
+    const horn = (freq: number, start: number, dur: number, gain: number) => {
+      const o = ctx.createOscillator();
+      o.type = "triangle";
+      o.frequency.setValueAtTime(freq * 0.985, start);
+      o.frequency.linearRampToValueAtTime(freq, start + 0.18);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(gain, start + 0.35);
+      g.gain.setValueAtTime(gain, Math.max(start + 0.36, start + dur - 0.5));
+      g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      o.connect(g).connect(this.master);
+      o.start(start);
+      o.stop(start + dur + 0.02);
+    };
+    horn(98, t0, 1.7, 0.30);
+    horn(147, t0 + 0.05, 1.65, 0.14);   // a fifth above, quieter — distance
+    horn(98, t0 + 1.6, 2.2, 0.26);      // the answer, longer
+    this.burst({ dur: 2.4, type: "lowpass", freq: 240, q: 0.6, gain: 0.10 });
+  }
+
+  /** Boar aggro — a wet two-huff snort before it paws the ground. */
+  boarSnort() {
+    this.burst({ dur: 0.14, type: "lowpass", freq: 480, q: 1.1, gain: 0.34 });
+    this.burst({ dur: 0.18, type: "lowpass", freq: 380, q: 1.1, gain: 0.40, delay: 0.16 });
+    this.tone({ freq: 130, to: 70, dur: 0.22, gain: 0.14, type: "sawtooth" });
+  }
+
+  /** Tusk hit — a heavy body thud. */
+  boarImpact() {
+    this.tone({ freq: 110, to: 40, dur: 0.3, gain: 0.42, type: "sine" });
+    this.burst({ dur: 0.22, type: "lowpass", freq: 500, q: 0.9, gain: 0.36 });
+  }
+
   build() {
     this.burst({ dur: 0.14, type: "bandpass", freq: 1800, q: 2.4, gain: 0.24 });
     this.tone({ freq: 420, to: 620, dur: 0.13, gain: 0.14, type: "square" });

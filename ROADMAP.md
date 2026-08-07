@@ -54,13 +54,14 @@ Implementation: `src/game/site_industrial.ts` (structures/props), `src/game/gene
 10. **Audio** — synthesized generator chug, laser charge-up, runner screech (oscillator/noise only,
     matching the existing no-samples policy).
 
-## Batch 2 — next
-11. NPC fetch quests (Farmer/Scrapper/Guard hand out fuel/scrap errands; reward scrap stockpile)
-12. Bridge + culvert over a dry wash crossing the map (uses IND04 concrete)
-13. Wave night — shamblers converge on the base on a 3-day timer; generator light radius repels them
-14. Player craftable pipe rifle + scrap shotgun (uses MET03/IND08), workbench UI
-15. Feral spore-boar creature (CRV atlas) with charge attack
-16. Save/load (localStorage JSON, per Heartbeat convention)
+## Batch 2 — shipped ✅ (items 11, 12, 13, 15)
+
+~~11. NPC fetch quests~~ ✅ — Farmer/Scrapper/Guard errands with HUD quest card (`src/game/quests.ts`)
+~~12. Bridge + culvert over a dry wash~~ ✅ — analytic terrain carve (SE diagonal) + concrete/wood deck bridge + walkable corrugated culvert (`src/game/terrain.ts`, `src/game/site_wash.ts`)
+~~13. Wave night~~ ✅ — every 3rd night, horde assaults the base; lit floodlights repel them
+15. ~~Feral spore-boar~~ ✅ — telegraphed charge attack, knockback, 3-charge pattern
+
+Remaining: craftable pipe rifle + scrap shotgun + workbench UI (14), save/load (16)
 
 ## Batch 3 — later
 17. Mobile-quality preset toggle in Settings (doctrine Part 5 table)

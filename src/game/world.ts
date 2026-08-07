@@ -16,6 +16,7 @@ import { surface, plain } from "./surface";
 import { bev, part, flatBox, cyl, bolts, rivets, along, seam, weld, vent, hinge, gutter, window as windowUnit } from "./kit";
 import { heightAt, normalAt } from "./terrain";
 import { buildIndustrial } from "./site_industrial";
+import { buildWash } from "./site_wash";
 
 export interface WorldRefs {
   scene: THREE.Scene;
@@ -586,6 +587,12 @@ export function buildWorld(refs: WorldRefs): void {
   // gas-station ruin, scrap magnet crane, seeded detail props. Runs on its
   // own RNG stream, so the scatter above keeps its original sequence.
   buildIndustrial(refs);
+
+  // ── DRY WASH CROSSINGS (Batch 2, item 12 — see site_wash.ts) ──────────
+  // Bridge + culvert on the channel carved in terrain.ts, and bed dressing.
+  // Own RNG stream (30911); sites were probe-checked against every asset
+  // footprint before the wash line was committed.
+  buildWash(refs);
 }
 
 // ─────────────────────────── the Homestead ───────────────────────────

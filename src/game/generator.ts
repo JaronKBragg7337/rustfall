@@ -186,6 +186,16 @@ export class Generator {
     return Math.hypot(this.group.position.x - p.x, this.group.position.z - p.z) < r;
   }
 
+  /**
+   * World positions of the floodlight poles — but only while they are LIT.
+   * Gameplay reads this on wave nights: the horde slows and veers inside these
+   * pools of light, so a fueled generator is a real wall, not a cosmetic one.
+   */
+  lamps(): Array<{ x: number; z: number }> {
+    if (!this.lit) return [];
+    return this.poles.map((g) => ({ x: g.position.x, z: g.position.z }));
+  }
+
   update(dt: number, nightness: number) {
     // one can over one night of run time; the tank visibly drains as it burns
     if (this.fuel > 0) this.fuel = Math.max(0, this.fuel - dt / this.nightSeconds);

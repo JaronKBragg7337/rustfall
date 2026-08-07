@@ -111,7 +111,68 @@ export function heightAt(x: number, z: number): number {
       bestLevel = naturalHeight(p.x, p.z);
     }
   }
-  return THREE.MathUtils.lerp(bestLevel, natural, bestT);
+  // The wash carves last: nothing graded overlaps it (probe-verified), so the
+  // subtraction never fights a pad, and every consumer of heightAt — mesh,
+  // feet, grounding, prop placement — inherits the channel automatically.
+  return THREE.MathUtils.lerp(bestLevel, natural, bestT) - washCarve(x, z);
+}
+
+// ─────────────────────────── dry wash ───────────────────────────
+// Batch 2 (item 12): a shallow eroded channel crossing the empty south-east
+// quadrant on a 45° diagonal — south edge near (45,-110) to east edge near
+// (110,-45). Analytic like the rest of the field: a signed across-line
+// coordinate, a slow sinusoidal meander, and a smoothstep bank profile, so the
+// mesh, feet, grounding and prop placement all inherit it from heightAt alone.
+//
+// Siting was probed against every known asset footprint and every graded pad
+// before carving: the nearest asset (billboard S at 7.5,-70) sits 56 m from the
+// centreline and the closest the carve gets to any pad core is 18.45 m of
+// rectDist (highway corridor, fade 7) — so no existing asset floats or buries.
+const WASH = {
+  halfW: 3.2,        // half the flat-ish channel bed — ~6.4 m wide
+  bank: 6.0,         // sloped bank run beyond the bed → outer influence 9.2 m
+  depth: 1.6,        // mid of the 1.2–2 m brief; breathes ±10% along its length
+  meanderAmp: 3,
+  meanderFreq: 0.0524, // ~120 m wavelength
+  meanderPhase: 1.7,
+} as const;
+
+/** Along-wash coordinate in metres (origin near map centre). */
+export function washU(x: number, z: number): number { return (x + z) * Math.SQRT1_2; }
+/** Across-wash signed coordinate: 0 on the unmeandered centreline. */
+export function washV(x: number, z: number): number { return (z - x + 155) * Math.SQRT1_2; }
+/** Centreline meander offset, in v. */
+export function washMeander(u: number): number {
+  return WASH.meanderAmp * Math.sin(WASH.meanderFreq * u + WASH.meanderPhase);
+}
+/** Distance from (x,z) to the meandering centreline. */
+export function washDist(x: number, z: number): number {
+  return Math.abs(washV(x, z) - washMeander(washU(x, z)));
+}
+
+/**
+ * World-space centreline point and frame at along-coordinate u.
+ * tangent t runs down-wash (+45°), normal n across it (+v side).
+ */
+export function washCenter(u: number): { x: number; z: number; tx: number; tz: number; nx: number; nz: number } {
+  const w = washMeander(u);
+  return {
+    x: 77.5 + (u - w) * Math.SQRT1_2,
+    z: -77.5 + (u + w) * Math.SQRT1_2,
+    tx: Math.SQRT1_2, tz: Math.SQRT1_2,
+    nx: -Math.SQRT1_2, nz: Math.SQRT1_2,
+  };
+}
+
+function washCarve(x: number, z: number): number {
+  const d = washDist(x, z);
+  if (d >= WASH.halfW + WASH.bank) return 0;
+  const t = 1 - THREE.MathUtils.smoothstep(d, WASH.halfW, WASH.halfW + WASH.bank);
+  // Depth breathes ±10% along the channel, and the bed keeps a fine gravel
+  // roughness instead of being planed smooth.
+  const depth = WASH.depth * (0.9 + 0.2 * fbm(washU(x, z) * 0.05 + 3.1, 8.7, 2));
+  const rough = (fbm(x * 0.4 + 9, z * 0.4 + 5, 2) - 0.5) * 0.14;
+  return depth * t - rough * t * t;
 }
 
 /** Surface normal by central difference — used to orient props to the slope. */
