@@ -11,6 +11,12 @@ A deterministic post-apocalyptic wasteland survival vertical slice, built with *
 - **Shamblers** — dead creatures that converge on the living
 - **Community NPCs** — a Farmer, a Scrapper, and a Guard working job stations around a walled home base
 - **Boss** — the 9-meter **IRON WARDEN** stomping the scorch arena
+- **Railway siding** — true-gauge rails on weathered sleepers, two riveted boxcars, and a climbable rail water tower
+- **Gas station ruin** — brick kiosk with real doorway/window apertures, detailed pumps, canopy and leaning price sign
+- **Scrap magnet crane** — tracked lattice-boom crane with a hanging disc magnet in the container yard
+- **Watchtower** — braced timber tower at the base perimeter with a night spotlight
+- **Fuel & generator** — scavenge fuel cans, feed the base generator, and floodlights burn through the night
+- **New threats** — zig-zag **Runner** shamblers and standoff **Stalker** sniper robots with laser telegraphs
 - **Vehicles with real seats** — Dune Buggy (2 seats) and Flatbed Truck (4 seats); only the driver steers, anyone can ride (**Q** to switch seats)
 - **Modular mech suit** — pilot it, then swap torso / arms / legs in the Mech Bay; every swap re-textures the part and re-solves speed / armor / power
 - **Real buildings** — the two-storey Homestead has three ground-floor rooms, walk-through doorways, windows, climbable stairs, and an upper level

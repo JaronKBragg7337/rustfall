@@ -12,6 +12,7 @@ const ATLAS_FILES: Record<AtlasName, string> = {
   terrain: "./textures/atlas_terrain.webp",
   metal: "./textures/atlas_metal.webp",
   structure: "./textures/atlas_structure.webp",
+  industrial: "./textures/atlas_industrial.webp",
   creature: "./textures/atlas_creature.webp",
 };
 

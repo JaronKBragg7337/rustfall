@@ -63,6 +63,8 @@ export class Player {
   camPitch = 0.22;
   hp = 100;
   maxHp = 100;
+  /** Fuel cans carried, waiting to be fed into the base generator. */
+  fuel = 0;
 
   velocity = new THREE.Vector3();
   grounded = true;

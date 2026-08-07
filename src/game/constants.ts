@@ -55,7 +55,7 @@ export function gridAddress(x: number, z: number, level = 0): string {
   return `L${level}-H${String(col).padStart(2, "0")}-R${String(row).padStart(2, "0")}`;
 }
 
-export type AtlasName = "terrain" | "metal" | "structure" | "creature";
+export type AtlasName = "terrain" | "metal" | "structure" | "creature" | "industrial";
 export type MaterialKey = keyof typeof MATERIALS;
 
 export interface MaterialCard {
@@ -110,6 +110,18 @@ export const MATERIALS: Record<string, MaterialCard> = {
   CRV07: { id: "TEX-CRV-07", atlas: "creature", cell: [2, 0], roughness: 0.75, metalness: 0.5, realSize: 1, seamless: false, label: "Hazard barrel" },
   CRV08: { id: "TEX-CRV-08", atlas: "creature", cell: [2, 1], roughness: 0.3, metalness: 0.1, realSize: 1.5, seamless: true, label: "Cracked glass" },
   CRV09: { id: "TEX-CRV-09", atlas: "creature", cell: [2, 2], roughness: 0.4, metalness: 0.5, realSize: 2, seamless: true, label: "Energy cells" },
+
+  // Industrial set — CC0 photographs (ambientCG), see assets/atlases/ATLAS_INDUSTRIAL_SOURCES.json.
+  // Values follow doctrine Part 4 reference data (metalness 0 for dielectrics).
+  IND01: { id: "TEX-IND-01", atlas: "industrial", cell: [0, 0], roughness: 0.6, metalness: 0.6, realSize: 2, seamless: true, label: "Corrugated steel" },
+  IND02: { id: "TEX-IND-02", atlas: "industrial", cell: [0, 1], roughness: 0.55, metalness: 0.5, realSize: 2, seamless: true, label: "Painted metal" },
+  IND03: { id: "TEX-IND-03", atlas: "industrial", cell: [0, 2], roughness: 0.9, metalness: 0, realSize: 2, seamless: true, label: "Weathered wood" },
+  IND04: { id: "TEX-IND-04", atlas: "industrial", cell: [1, 0], roughness: 0.94, metalness: 0, realSize: 3, seamless: true, label: "Cast concrete" },
+  IND05: { id: "TEX-IND-05", atlas: "industrial", cell: [1, 1], roughness: 0.88, metalness: 0, realSize: 3, seamless: true, label: "Damaged brick" },
+  IND06: { id: "TEX-IND-06", atlas: "industrial", cell: [1, 2], roughness: 0.96, metalness: 0, realSize: 3, seamless: true, label: "Gravel ballast" },
+  IND07: { id: "TEX-IND-07", atlas: "industrial", cell: [2, 0], roughness: 0.88, metalness: 0, realSize: 4, seamless: true, label: "Patched asphalt" },
+  IND08: { id: "TEX-IND-08", atlas: "industrial", cell: [2, 1], roughness: 0.55, metalness: 0.75, realSize: 1.5, seamless: true, label: "Tread plate" },
+  IND09: { id: "TEX-IND-09", atlas: "industrial", cell: [2, 2], roughness: 0.85, metalness: 0, realSize: 1.5, seamless: true, label: "Worn tarp fabric" },
 };
 
 // Asset registry entry — every placed thing is locatable & inspectable by address.

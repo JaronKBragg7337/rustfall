@@ -10,7 +10,7 @@ import * as THREE from "./three";
 import { WORLD, makeRng, registerAsset, MATERIALS, SAFE_ZONE, safeZoneFactor } from "./constants";
 import { surface, plain } from "./surface";
 import { bev, part, flatBox, cyl, bolts, rivets, along, perimeter, seam, weld, vent, bevelBox } from "./kit";
-import { Humanoid, STYLES } from "./figures";
+import { Humanoid, STYLES, type HumanoidStyle } from "./figures";
 import { heightAt } from "./terrain";
 
 export interface Entity {
@@ -335,6 +335,186 @@ export class Robot implements Entity {
   }
 }
 
+// ─────────────────────────────── STALKER ROBOT ───────────────────────────────
+// Sniper variant of the patrol chassis. It will not close in: it holds a
+// 25–40 m standoff, paints the player with a visible laser for a breath, fires
+// one hard bolt, then displaces to a fresh vantage before doing it again.
+// Slower than the patrol units and it never stages inside the sanctuary.
+export class StalkerBot implements Entity {
+  group = new THREE.Group();
+  hp = 45; maxHp = 45;
+  hostile = true;
+  dead = false;
+  radius = 1.0;
+  onFire: ((from: THREE.Vector3, to: THREE.Vector3) => void) | null = null;
+  onCharge: (() => void) | null = null;
+  private rng: () => number;
+  /** Deliberately slower than the 3.1 m/s patrol robots — it wins by range. */
+  private speed = 2.3;
+  private state: "hunt" | "aim" | "displace" = "hunt";
+  private aimT = 0;
+  private vantage = new THREE.Vector3();
+  private laserMat: THREE.LineBasicMaterial;
+  private laser: THREE.Line;
+  private muzzleMat: THREE.MeshStandardMaterial;
+  private muzzleLocal = new THREE.Vector3(0, 1.28, 1.43);
+  private eye: THREE.Mesh;
+  private turret: THREE.Group;
+  private wheels: THREE.Mesh[] = [];
+  private travelled = 0;
+  private bobPhase = Math.random() * 6.28;
+
+  constructor(pos: THREE.Vector3, seed = 6100) {
+    this.rng = makeRng(seed);
+    const hull = M.gunmetal();
+    const worn = M.hullWorn();
+    const steel = M.steel();
+    const dark = M.darkSteel();
+
+    // ── primary: low slab hull on tracks ──
+    this.group.add(bev(0.92, 0.36, 1.18, hull, { pos: [0, 0.46, 0] }));
+    this.group.add(bev(0.72, 0.34, 0.82, worn, { pos: [0, 0.82, -0.08] }));
+    this.group.add(part(bevelBox(0.86, 0.28, 0.05), hull, { pos: [0, 0.60, 0.56], rot: [-0.5, 0, 0] }));
+    for (const sx of [-1, 1]) {
+      const t = trackUnit({ band: M.tread(), wheel: dark, steel });
+      t.group.position.set(sx * 0.56, 0.28, 0);
+      if (sx === 1) t.group.rotation.y = Math.PI;
+      this.wheels.push(...t.wheels);
+      this.group.add(t.group);
+    }
+    this.group.add(bolts(perimeter(0.84, 0.30, 0.028, 0.05, 4), steel, 0.012));
+    this.group.add(rivets(along([-0.40, 0.46, 0.592], [0.40, 0.46, 0.592], 8), steel));
+
+    // ── secondary: stabilised turret with a full-length precision barrel ──
+    this.turret = new THREE.Group();
+    this.turret.position.set(0, 1.02, -0.05);
+    this.turret.add(part(cyl(0.19, 0.22, 0.09, 12), steel, { pos: [0, 0.045, 0] }));
+    this.turret.add(bev(0.30, 0.24, 0.34, hull, { pos: [0, 0.24, 0] }));
+    // barrel: receiver, long tube, muzzle brake
+    this.turret.add(part(cyl(0.075, 0.085, 0.30, 10), dark, { pos: [0, 0.26, 0.26], rot: [Math.PI / 2, 0, 0] }));
+    this.turret.add(part(cyl(0.034, 0.042, 1.05, 10), steel, { pos: [0, 0.26, 0.86], rot: [Math.PI / 2, 0, 0] }));
+    this.turret.add(part(cyl(0.055, 0.055, 0.12, 10), dark, { pos: [0, 0.26, 1.42], rot: [Math.PI / 2, 0, 0] }));
+    // scope on a riser + the glowing emitter that advertises the shot
+    this.turret.add(part(flatBox(0.06, 0.06, 0.24), dark, { pos: [0, 0.42, 0.05] }));
+    this.turret.add(part(cyl(0.035, 0.035, 0.03, 8), M.glass(), { pos: [0, 0.42, 0.18], rot: [Math.PI / 2, 0, 0] }));
+    this.muzzleMat = new THREE.MeshStandardMaterial({ color: 0x140505, emissive: 0xff2a1a, emissiveIntensity: 0.4, roughness: 0.3, metalness: 0.2 });
+    this.turret.add(part(cyl(0.03, 0.03, 0.02, 8), this.muzzleMat, { pos: [0, 0.26, 1.485], rot: [Math.PI / 2, 0, 0], shadow: false }));
+    this.eye = part(cyl(0.04, 0.04, 0.02, 10), emissive(0xff8812, 2.6), { pos: [0, 0.24, 0.175], rot: [Math.PI / 2, 0, 0], shadow: false });
+    this.turret.add(this.eye);
+    this.group.add(this.turret);
+
+    // The telegraph laser: a child line whose endpoints are rewritten in local
+    // space every aim frame, so it tracks the player without scene plumbing.
+    this.laserMat = new THREE.LineBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0 });
+    this.laser = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      this.laserMat
+    );
+    this.laser.frustumCulled = false;
+    this.group.add(this.laser);
+
+    this.group.position.copy(pos);
+    shadowed(this.group);
+    registerAsset("stalker robot", this.group, "BOT");
+  }
+
+  /** New firing position on the 25–40 m ring around the player, never in the base. */
+  private pickVantage(playerPos: THREE.Vector3) {
+    const a = this.rng() * Math.PI * 2;
+    const r = 25 + this.rng() * 15;
+    this.vantage.set(playerPos.x + Math.cos(a) * r, 0, playerPos.z + Math.sin(a) * r);
+    clampToWorld(this.vantage);
+    if (safeZoneFactor(this.vantage.x, this.vantage.z) > 0) {
+      const dx = this.vantage.x - SAFE_ZONE.x;
+      const dz = this.vantage.z - SAFE_ZONE.z;
+      const d = Math.hypot(dx, dz) || 1e-4;
+      this.vantage.x = SAFE_ZONE.x + (dx / d) * (SAFE_ZONE.radius + 3);
+      this.vantage.z = SAFE_ZONE.z + (dz / d) * (SAFE_ZONE.radius + 3);
+    }
+  }
+
+  private moveToward(dest: THREE.Vector3, dt: number, sp: number): boolean {
+    const p = this.group.position;
+    const dir = new THREE.Vector3(dest.x - p.x, 0, dest.z - p.z);
+    if (dir.length() < 1.2) return true;
+    dir.normalize();
+    const targetYaw = Math.atan2(dir.x, dir.z);
+    let dy = targetYaw - this.group.rotation.y;
+    while (dy > Math.PI) dy -= Math.PI * 2;
+    while (dy < -Math.PI) dy += Math.PI * 2;
+    this.group.rotation.y += THREE.MathUtils.clamp(dy, -2.2 * dt, 2.2 * dt);
+    p.addScaledVector(dir, sp * dt);
+    this.travelled += sp * dt;
+    clampToWorld(p);
+    return false;
+  }
+
+  update(dt: number, playerPos: THREE.Vector3) {
+    if (this.dead) return;
+    const p = this.group.position;
+    const dist = Math.hypot(playerPos.x - p.x, playerPos.z - p.z);
+    this.bobPhase += dt;
+
+    if (this.state === "aim") {
+      this.aimT -= dt;
+      // hull and turret both track — the laser never lies about where the bolt goes
+      const yaw = Math.atan2(playerPos.x - p.x, playerPos.z - p.z);
+      this.group.rotation.y = yaw;
+      this.turret.rotation.y = 0;
+      // charge-up: glow rises, beam tightens from a flicker to a hard line
+      const charge = 1 - Math.max(0, this.aimT) / 1.2;
+      this.muzzleMat.emissiveIntensity = 0.4 + charge * 3.2;
+      this.laserMat.opacity = 0.18 + charge * 0.6 + Math.sin(this.bobPhase * 31) * 0.06 * (1 - charge);
+      const from = this.group.localToWorld(this.muzzleLocal.clone());
+      const to = new THREE.Vector3(playerPos.x, playerPos.y + 1.2, playerPos.z);
+      const pts = [this.group.worldToLocal(from.clone()), this.group.worldToLocal(to.clone())];
+      this.laser.geometry.setFromPoints(pts);
+      if (dist > 55) {
+        // player broke contact — stand down rather than waste the shot
+        this.state = "hunt";
+        this.laserMat.opacity = 0;
+        this.muzzleMat.emissiveIntensity = 0.4;
+      } else if (this.aimT <= 0) {
+        this.onFire?.(from, to);
+        this.laserMat.opacity = 0;
+        this.muzzleMat.emissiveIntensity = 0.4;
+        this.pickVantage(playerPos);
+        this.state = "displace";
+      }
+    } else if (this.state === "displace") {
+      if (this.moveToward(this.vantage, dt, this.speed * 1.35)) this.state = "hunt";
+    } else {
+      // hunt: hold the standoff band; only settle into the shot inside it
+      if (dist > 40) this.moveToward(playerPos, dt, this.speed);
+      else if (dist < 25) {
+        const away = new THREE.Vector3(p.x * 2 - playerPos.x, 0, p.z * 2 - playerPos.z);
+        this.moveToward(away, dt, this.speed);
+      } else {
+        this.state = "aim";
+        this.aimT = 1.2;
+        this.onCharge?.();
+      }
+    }
+
+    keepOutOfSafeZone(p);
+    for (const w of this.wheels) w.rotation.y = -this.travelled * 5.4;
+    p.y = heightAt(p.x, p.z) + Math.sin(this.bobPhase * 3.1) * 0.012;
+  }
+
+  damage(n: number) {
+    if (this.dead) return;
+    this.hp -= n;
+    if (this.hp <= 0) {
+      this.dead = true;
+      this.group.rotation.z = Math.PI / 2.2;
+      this.group.position.y = heightAt(this.group.position.x, this.group.position.z) + 0.2;
+      (this.eye.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
+      this.laserMat.opacity = 0;
+      this.muzzleMat.emissiveIntensity = 0;
+    }
+  }
+}
+
 // ─────────────────────────────── SHAMBLER ───────────────────────────────
 export class Shambler implements Entity {
   group = new THREE.Group();
@@ -372,6 +552,83 @@ export class Shambler implements Entity {
       this.moving = THREE.MathUtils.damp(this.moving, 0, 4, dt);
     }
     this.body.shamble(dt, this.moving);
+    clampToWorld(p);
+    keepOutOfSafeZone(p);
+    p.y = heightAt(p.x, p.z);
+  }
+
+  damage(n: number) {
+    if (this.dead) return;
+    this.hp -= n;
+    if (this.hp <= 0) {
+      this.dead = true;
+      this.group.rotation.x = -Math.PI / 2;
+      this.group.position.y = heightAt(this.group.position.x, this.group.position.z) + 0.25;
+    }
+  }
+}
+
+// ─────────────────────────────── RUNNER SHAMBLER ───────────────────────────────
+// The fast one. Where the shambler is a wall of dead weight, the runner is a
+// sprung trap: taller, leaner, hunched low, and quick enough that standing
+// still to aim is a mistake. It pays for the speed with tissue-paper health.
+const RUNNER_STYLE: HumanoidStyle = {
+  jacket: "CRV02", trousers: "CRV01", boots: "CRV03",
+  skin: 0x9aa57c, accent: 0x7e2a1e, height: 1.84, bulk: 0.72,
+};
+
+export class RunnerShambler implements Entity {
+  group = new THREE.Group();
+  hp = 18; maxHp = 18;
+  hostile = true;
+  dead = false;
+  radius = 0.7;
+  onAggro: (() => void) | null = null;
+  /** ~1.6× the player's 7.4 m/s sprint — you cannot simply outrun it. */
+  private speed = 11.8;
+  private body: Humanoid;
+  private moving = 0;
+  private zigPhase: number;
+  private aggroed = false;
+
+  constructor(pos: THREE.Vector3, seed = 0) {
+    this.body = new Humanoid(RUNNER_STYLE);
+    this.group.add(this.body.group);
+    this.group.position.copy(pos);
+    this.zigPhase = seed * 1.618;
+    shadowed(this.group);
+    registerAsset("runner shambler", this.group, "ZOM");
+  }
+
+  update(dt: number, playerPos: THREE.Vector3) {
+    if (this.dead) return;
+    const p = this.group.position;
+    const dir = new THREE.Vector3(playerPos.x - p.x, 0, playerPos.z - p.z);
+    const d = dir.length();
+    if (d < 46 && d > 0.7) {
+      if (!this.aggroed) { this.aggroed = true; this.onAggro?.(); }
+      dir.normalize();
+      // Zig-zag approach: a perpendicular sine sway on top of the pursuit
+      // vector, so leading the target keeps missing by a body's width.
+      this.zigPhase += dt * 2.6;
+      const sway = Math.sin(this.zigPhase) * 0.9;
+      const mx = dir.x - dir.z * sway;
+      const mz = dir.z + dir.x * sway;
+      const ml = Math.hypot(mx, mz) || 1e-4;
+      const targetYaw = Math.atan2(mx / ml, mz / ml);
+      let dy = targetYaw - this.group.rotation.y;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      this.group.rotation.y += THREE.MathUtils.clamp(dy, -4.5 * dt, 4.5 * dt);
+      p.x += (mx / ml) * this.speed * dt;
+      p.z += (mz / ml) * this.speed * dt;
+      this.moving = this.speed;
+    } else {
+      this.moving = THREE.MathUtils.damp(this.moving, 0, 4, dt);
+    }
+    this.body.animate(dt, this.moving, this.speed);
+    // deeper hunch than the run cycle gives on its own — the runner's signature
+    this.body.chest.rotation.x += 0.28;
     clampToWorld(p);
     keepOutOfSafeZone(p);
     p.y = heightAt(p.x, p.z);

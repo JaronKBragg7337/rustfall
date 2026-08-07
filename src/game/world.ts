@@ -15,6 +15,7 @@ import { WORLD, registerAsset, registerAperture, QUALITY, makeRng, type AssetFla
 import { surface, plain } from "./surface";
 import { bev, part, flatBox, cyl, bolts, rivets, along, seam, weld, vent, hinge, gutter, window as windowUnit } from "./kit";
 import { heightAt, normalAt } from "./terrain";
+import { buildIndustrial } from "./site_industrial";
 
 export interface WorldRefs {
   scene: THREE.Scene;
@@ -579,6 +580,12 @@ export function buildWorld(refs: WorldRefs): void {
     last.rotation.x += Math.atan2(-n.z, n.y) * 0.9;
     last.rotation.z += Math.atan2(n.x, n.y) * 0.9;
   }
+
+  // ── INDUSTRIAL EXPANSION (Batch 1 — see site_industrial.ts) ────────────
+  // Railway siding + boxcars, rail water tower, perimeter watchtower,
+  // gas-station ruin, scrap magnet crane, seeded detail props. Runs on its
+  // own RNG stream, so the scatter above keeps its original sequence.
+  buildIndustrial(refs);
 }
 
 // ─────────────────────────── the Homestead ───────────────────────────

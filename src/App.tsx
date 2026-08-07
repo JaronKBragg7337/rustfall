@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 const INITIAL_HUD: HudState = {
   hp: 100, bossHp: null, mode: "FOOT", layer: "game", building: false,
   buildPiece: "", buildLegal: false, buildSnapped: false, buildReason: "", interact: null,
-  kills: 0, scrap: 0, vehicleName: null, seatName: null, mechParts: null, mechStats: null,
+  kills: 0, scrap: 0, fuel: 0, genFuel: 0, genRunning: false, genLit: false, vehicleName: null, seatName: null, mechParts: null, mechStats: null,
   mechBayOpen: false, issues: 0, address: "0, 0, 0", nearby: [], muted: false, timeOfDay: 0.42, clock: "10:04", dust: 0, timeFrozen: false, toast: "", lootLeft: 0,
   firstPerson: false, devMode: false, safe: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
 };
@@ -151,6 +151,14 @@ export default function App() {
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-300">{hud.mode}</Badge>
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-300">☠ {hud.kills}</Badge>
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-amber-700 text-amber-300">⛏ {hud.scrap}</Badge>
+          <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-red-800 text-red-300">⛽ {hud.fuel}</Badge>
+          {(hud.genRunning || hud.genFuel > 0 || hud.safe) && (
+            <Badge variant="outline" className={`text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest ${
+              hud.genLit ? "border-yellow-400 text-yellow-300" : hud.genRunning ? "border-emerald-600 text-emerald-300" : "border-zinc-600 text-zinc-400"
+            }`}>
+              ⚡ GEN {hud.genFuel.toFixed(1)} · {hud.genLit ? "LIT" : hud.genRunning ? "RUN" : "OFF"}
+            </Badge>
+          )}
           <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-zinc-600 text-zinc-400">◆ {hud.lootLeft}</Badge>
           {hud.layer === "inspection" && (
             <Badge variant="outline" className="text-[8px] sm:text-[10px] px-1.5 py-0 tracking-widest border-cyan-400 text-cyan-300">◈ INSPECT</Badge>

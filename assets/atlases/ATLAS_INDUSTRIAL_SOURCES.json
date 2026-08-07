@@ -1,0 +1,56 @@
+[
+  {
+    "card": "IND01",
+    "label": "Corrugated steel",
+    "source": "ambientCG CorrugatedSteel005",
+    "license": "CC0"
+  },
+  {
+    "card": "IND02",
+    "label": "Painted metal",
+    "source": "ambientCG Metal032",
+    "license": "CC0"
+  },
+  {
+    "card": "IND03",
+    "label": "Weathered wood",
+    "source": "ambientCG Planks003",
+    "license": "CC0"
+  },
+  {
+    "card": "IND04",
+    "label": "Cast concrete",
+    "source": "ambientCG Concrete034",
+    "license": "CC0"
+  },
+  {
+    "card": "IND05",
+    "label": "Damaged brick",
+    "source": "ambientCG Bricks051",
+    "license": "CC0"
+  },
+  {
+    "card": "IND06",
+    "label": "Gravel ballast",
+    "source": "ambientCG Ground054",
+    "license": "CC0"
+  },
+  {
+    "card": "IND07",
+    "label": "Patched asphalt",
+    "source": "ambientCG Asphalt019",
+    "license": "CC0"
+  },
+  {
+    "card": "IND08",
+    "label": "Tread plate",
+    "source": "ambientCG MetalPlates006",
+    "license": "CC0"
+  },
+  {
+    "card": "IND09",
+    "label": "Worn tarp fabric",
+    "source": "ambientCG Fabric023",
+    "license": "CC0"
+  }
+]

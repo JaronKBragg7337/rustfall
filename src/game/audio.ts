@@ -22,6 +22,7 @@ export class Audio {
   private started = false;
   muted = false;
   private volume = MASTER_DEFAULT;
+  private genGain: GainNode | null = null;
 
   /** Safe to call on every gesture; only the first one does anything. */
   resume() {
@@ -206,6 +207,70 @@ export class Audio {
     this.tone({ freq: 660, dur: 0.1, gain: 0.16, type: "triangle" });
     this.tone({ freq: 990, dur: 0.14, gain: 0.14, type: "triangle", delay: 0.07 });
     this.tone({ freq: 1320, dur: 0.18, gain: 0.1, type: "sine", delay: 0.14 });
+  }
+
+  /**
+   * Generator chug — the second persistent voice after the wind. A square-wave
+   * LFO gates two low oscillators into the classic single-cylinder putter, and
+   * the engine drives the master gain every frame with distance attenuation,
+   * so it is only ever audible while running AND nearby. Muting rides on the
+   * master gain like every other voice.
+   */
+  setGenerator(running: boolean, proximity: number) {
+    if (!this.started) return;
+    const ctx = this.ctx!;
+    if (!this.genGain) {
+      const o1 = ctx.createOscillator();
+      o1.type = "sawtooth";
+      o1.frequency.value = 52;
+      const o2 = ctx.createOscillator();
+      o2.type = "square";
+      o2.frequency.value = 104;
+      const o2Gain = ctx.createGain();
+      o2Gain.gain.value = 0.4;
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = 330;
+      filter.Q.value = 0.8;
+      const am = ctx.createGain();
+      am.gain.value = 0.72;
+      const lfo = ctx.createOscillator();
+      lfo.type = "square";
+      lfo.frequency.value = 7.4;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0.28;
+      lfo.connect(lfoGain).connect(am.gain);
+      this.genGain = ctx.createGain();
+      this.genGain.gain.value = 0;
+      o1.connect(filter);
+      o2.connect(o2Gain).connect(filter);
+      filter.connect(am).connect(this.genGain).connect(this.master);
+      o1.start();
+      o2.start();
+      lfo.start();
+    }
+    const target = running && !this.muted ? Math.max(0, Math.min(1, proximity)) * 0.3 : 0;
+    this.genGain.gain.setTargetAtTime(target, ctx.currentTime, 0.25);
+  }
+
+  /** Stalker telegraph — a rising whine that tightens as the shot charges. */
+  laserCharge() {
+    this.tone({ freq: 240, to: 1900, dur: 1.15, gain: 0.15, type: "sawtooth" });
+    this.tone({ freq: 480, to: 2600, dur: 1.15, gain: 0.06, type: "sine" });
+  }
+
+  /** The bolt leaving the barrel — a crack, not a zap. */
+  laserDischarge() {
+    this.burst({ dur: 0.2, type: "highpass", freq: 1800, q: 0.7, gain: 0.38 });
+    this.tone({ freq: 2400, to: 180, dur: 0.22, gain: 0.28, type: "square" });
+    this.burst({ dur: 0.32, type: "lowpass", freq: 480, q: 0.8, gain: 0.16, delay: 0.02 });
+  }
+
+  /** Runner aggro — a two-bark shriek so the fast one announces itself. */
+  runnerScreech() {
+    this.tone({ freq: 700, to: 1500, dur: 0.26, gain: 0.18, type: "sawtooth" });
+    this.tone({ freq: 1450, to: 520, dur: 0.38, gain: 0.16, type: "sawtooth", delay: 0.2 });
+    this.burst({ dur: 0.5, type: "bandpass", freq: 2100, q: 2.5, gain: 0.1 });
   }
 
   build() {

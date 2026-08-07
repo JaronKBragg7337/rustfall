@@ -3,7 +3,8 @@ import * as THREE from "./three";
 import { makeRng, QUALITY, IS_TOUCH, safeZoneFactor, assetRegistry } from "./constants";
 import { loadAtlases } from "./textures";
 import { buildWorld } from "./world";
-import { Robot, Shambler, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity } from "./entities";
+import { Robot, Shambler, RunnerShambler, StalkerBot, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity } from "./entities";
+import { Generator } from "./generator";
 import { Player, FEEL, type MoveInput } from "./player";
 import { BuildMode, PIECES } from "./build";
 import { InspectionLayer, type LayerMode } from "./inspection";
@@ -29,6 +30,10 @@ export interface HudState {
   interact: string | null;
   kills: number;
   scrap: number;
+  fuel: number;
+  genFuel: number;
+  genRunning: boolean;
+  genLit: boolean;
   vehicleName: string | null;
   seatName: string | null;
   mechParts: { torso: string; arms: string; legs: string } | null;
@@ -107,6 +112,7 @@ export class Game {
   private dustTarget = 0;
   private cinema = new Cinematic();
   private loot!: LootField;
+  private generator!: Generator;
   private toast = "";
   private toastTtl = 0;
   private audio = new Audio();
@@ -176,6 +182,23 @@ export class Game {
       }
     }
 
+    // ── Fuel cans: the generator's diet, scattered with their own seed ──
+    {
+      const fuelRng = makeRng(9917);
+      const cans = QUALITY.mobile ? 5 : 8;
+      for (let i = 0; i < cans; i++) {
+        const a = fuelRng() * Math.PI * 2;
+        const r = 15 + fuelRng() * 65;
+        const x = Math.cos(a) * r;
+        const z = Math.sin(a) * r;
+        this.loot.addFuelCan(new THREE.Vector3(x, heightAt(x, z), z));
+      }
+      // two cans just outside the base gate, so the fuel loop is discoverable
+      // on the first walk out rather than after an hour of scavenging
+      this.loot.addFuelCan(new THREE.Vector3(4.5, heightAt(4.5, -40), -40));
+      this.loot.addFuelCan(new THREE.Vector3(5.5, heightAt(5.5, -49), -49));
+    }
+
     this.scene.add(this.player.group);
     // Every mesh in the scene, not just top-level ones — the old filter missed
     // everything nested in a Group, so the camera clipped through most of the world.
@@ -213,10 +236,35 @@ export class Game {
       this.entities.push(r);
     }
     for (const e of this.entities) this.scene.add(e.group);
-    for (let i = 0; i < 8; i++) {
-      const z = new Shambler(spawn(30, 85));
-      this.entities.push(z);
-      this.scene.add(z.group);
+    // Runner shamblers REPLACE part of the pack rather than adding to it, so
+    // mobile keeps its QUALITY.shamblers budget — one in four, rounded up.
+    {
+      const shamblerCount = QUALITY.shamblers;
+      const runnerCount = Math.max(1, Math.round(shamblerCount / 4));
+      for (let i = 0; i < shamblerCount; i++) {
+        const pos = spawn(30, 85);
+        const z = i < runnerCount ? new RunnerShambler(pos, i + 1) : new Shambler(pos);
+        if (z instanceof RunnerShambler) z.onAggro = () => this.audio.runnerScreech();
+        this.entities.push(z);
+        this.scene.add(z.group);
+      }
+    }
+    // Stalkers: long-range snipers working the open ground. Capped at 1–2.
+    for (let i = 0; i < (QUALITY.mobile ? 1 : 2); i++) {
+      const s = new StalkerBot(spawn(45, 80), 6100 + i * 97);
+      s.onCharge = () => this.audio.laserCharge();
+      s.onFire = (from, to) => {
+        // same cover contract as every other shot: walls stop bolts
+        const clear = this.lineOfSight(from, to);
+        const dir = new THREE.Vector3().subVectors(to, from).normalize();
+        this.spawnTracer(from, clear.point, clear.hit ? 0x885544 : 0xff2222);
+        this.audio.laserDischarge();
+        this.fx.muzzleFlash(from, dir);
+        if (clear.hit) { this.audio.shotBlocked(); this.fx.impact(clear.point, dir.clone().negate()); }
+        else { this.damagePlayer(28); this.audio.hurt(); }
+      };
+      this.entities.push(s);
+      this.scene.add(s.group);
     }
     const bx = -6, bz = -44;
     this.helpers.push(
@@ -238,6 +286,21 @@ export class Game {
     for (const v of this.vehicles) this.scene.add(v.group);
     this.mech = new Mech(new THREE.Vector3(-14, heightAt(-14, -40), -40));
     this.scene.add(this.mech.group);
+
+    // ── Base generator + perimeter floodlights ──
+    // One can burns over half a day-cycle — the full night. Poles hug the four
+    // inside corners of the scrap wall; phones get two of them, unshadowed.
+    {
+      const poles: Array<[number, number]> = QUALITY.mobile
+        ? [[-11, -49], [-1, -39]]
+        : [[-11, -49], [-1, -49], [-11, -39], [-1, -39]];
+      this.generator = new Generator(
+        new THREE.Vector3(-10.5, heightAt(-10.5, -38.5), -38.5),
+        this.dayLength * 0.5,
+        poles
+      );
+      this.generator.addToScene(this.scene);
+    }
 
     this.buildMode = new BuildMode(this.scene, this.colliders);
     this.inspection = new InspectionLayer(this.scene);
@@ -421,11 +484,29 @@ export class Game {
       const node = this.loot.nearest(p);
       if (node) {
         const got = this.loot.take(node);
-        this.scrap += got;
-        this.say(`+${got} SCRAP · ${node.label}`);
+        if (node.fuel) {
+          this.player.fuel += 1;
+          this.say(`+1 FUEL CAN · ⛽ ${this.player.fuel}`);
+        } else {
+          this.scrap += got;
+          this.say(`+${got} SCRAP · ${node.label}`);
+        }
         this.audio.pickup();
         this.fx.salvageBurst(new THREE.Vector3(node.pos.x, node.pos.y + 0.5, node.pos.z));
-        this.spawnRing(new THREE.Vector3(node.pos.x, node.pos.y + 0.1, node.pos.z), 0xffc455);
+        this.spawnRing(new THREE.Vector3(node.pos.x, node.pos.y + 0.1, node.pos.z), node.fuel ? 0xff5040 : 0xffc455);
+        return;
+      }
+      // Feeding the generator is an E-interaction like everything else — same
+      // key, same range test, one owner.
+      if (this.generator.near(p)) {
+        if (this.player.fuel > 0) {
+          this.player.fuel -= 1;
+          this.generator.feed();
+          this.say(`GENERATOR FUELED · ${this.generator.fuel.toFixed(1)} CANS`);
+          this.audio.build();
+        } else {
+          this.say("GENERATOR IS DRY — FIND FUEL CANS");
+        }
         return;
       }
       let nearest: Vehicle | null = null;
@@ -631,6 +712,12 @@ export class Game {
     }
     for (const h of this.helpers) h.update(dt);
     this.loot.update(dt, pp);
+    // The generator burns, lights at dusk, and chugs only within earshot.
+    this.generator.update(dt, this.sky.nightness);
+    {
+      const gd = this.generator.group.position.distanceTo(pp);
+      this.audio.setGenerator(this.generator.running, Math.max(0, 1 - gd / 30));
+    }
 
     // Footsteps: advance a phase by distance covered, not by time, so cadence
     // follows speed for free and never drifts out of sync with the walk cycle.
@@ -774,11 +861,18 @@ export class Game {
         ? "EXIT"
         : (() => {
             const n = this.loot.nearest(pp);
-            if (n) return `SEARCH ${n.label}`;
+            if (n) return n.fuel ? "TAKE FUEL CAN" : `SEARCH ${n.label}`;
+            if (this.generator.near(pp)) {
+              return this.player.fuel > 0 ? `FEED GENERATOR ⛽×${this.player.fuel}` : "GENERATOR · NEEDS FUEL";
+            }
             return nearestV ? `BOARD ${nearestV.name}` : nearMech ? "PILOT MECH" : null;
           })(),
       kills: this.kills,
       scrap: this.scrap,
+      fuel: this.player.fuel,
+      genFuel: Math.round(this.generator.fuel * 10) / 10,
+      genRunning: this.generator.running,
+      genLit: this.generator.lit,
       vehicleName: this.mode === "VEHICLE" && this.currentVehicle ? this.currentVehicle.name : null,
       seatName: this.mode === "VEHICLE" && this.currentVehicle ? this.currentVehicle.seats[this.currentVehicle.seatIdx].name : null,
       mechParts: this.mode === "MECH" ? this.mech.partNames() : null,
