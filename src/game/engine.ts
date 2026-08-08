@@ -22,6 +22,8 @@ import { WEAPONS, RECIPES, makeRifleProp, makeShotgunProp, type WeaponId } from 
 import { TRADE_OFFERS, type TradeId } from "./trade";
 import { plain } from "./surface";
 import { SAVE_VERSION, loadSave, writeSave, clearSave, hasSave, type SaveData } from "./save";
+import { NetClient, type EntEntry, type EntSnapshotMsg, type EventMsg, type NetRole, type RosterEntry, type TransformMsg } from "./net";
+import { RemotePlayers } from "./remotePlayers";
 
 export interface HudState {
   hp: number;
@@ -91,6 +93,9 @@ export interface HudState {
   hasWeapons: boolean;
   /** Active graphics preset (Batch 3 item 17). */
   quality: QualityPreset;
+  /** Multiplayer session (null = solo). Powers the players panel. */
+  mp: { code: string; role: NetRole; selfId: string; players: RosterEntry[] } | null;
+  playersOpen: boolean;
 }
 
 interface Ring { obj: THREE.Mesh; t: number; }
@@ -236,6 +241,27 @@ export class Game {
   private static readonly AUTOSAVE_EVERY = 30; // seconds
   // ── Quality preset (item 17) ──
   private quality: QualityPreset = getQualityPreset();
+  // ── Multiplayer (wasteland-commons co-op; all inert in solo) ──
+  private net: NetClient | null = null;
+  private netRole: NetRole | null = null;
+  private remotes: RemotePlayers | null = null;
+  private playersOpen = false;
+  private netSendT = 0;   // transform cadence (10 Hz)
+  private netSnapT = 0;   // host entity-snapshot cadence (8 Hz)
+  private puppetGraceUntil = 0;
+  /** Inbound queues — net callbacks push, tick() drains. Never render off-callback. */
+  private transformQueue: TransformMsg[] = [];
+  private eventQueue: EventMsg[] = [];
+  private latestSnapshot: EntSnapshotMsg | null = null;
+  /** Deterministic per-hostile network ids, assigned in seeded spawn order. */
+  private netIds = new Map<Entity, string>();
+  private netEntities = new Map<string, Entity>();
+  /** Latest host snapshot target per entity id (guest side). */
+  private netTargets = new Map<string, { x: number; y: number; z: number; yaw: number; spd: number; dead: boolean; seen: number }>();
+  /** Wave puppets the guest materialised from host snapshots. */
+  private guestSpawned = new Set<Entity>();
+  /** Previous roster, for join/leave toasts. */
+  private prevRoster = new Map<string, string>();
 
   onHud: (h: HudState) => void = () => {};
   onTouch: (t: TouchState | null) => void = () => {};
@@ -464,6 +490,10 @@ export class Game {
       this.scene.add(g.group);
       this.goretusk = g;
     }
+    // Multiplayer: deterministic network ids for every hostile, assigned in
+    // seeded spawn order so host and guests name the same entities. Inert
+    // unless a room is joined; solo play never reads the maps.
+    this.assignNetIds();
     // ── SAL the Trader (1): holds the trading-post stall at (-31, 77.3) ──
     // He never leaves the counter — two stations inside the stall footprint.
     this.trader = new Trader(
@@ -544,7 +574,7 @@ export class Game {
     if (e.repeat) return;
     this.audio.resume();
     // Panels own Escape/Tab while open — one owner per key, per state.
-    if (e.code === "Escape" && (this.inventoryOpen || this.craftOpen || this.tradeOpen)) {
+    if (e.code === "Escape" && (this.inventoryOpen || this.craftOpen || this.tradeOpen || this.playersOpen)) {
       this.closePanels();
       return;
     }
@@ -554,6 +584,7 @@ export class Game {
       return;
     }
     this.keys.add(e.code);
+    if (e.code === "KeyU") this.togglePlayers();
     if (e.code === "KeyL") this.setLayer(this.inspection.mode === "game" ? "inspection" : "game");
     if (e.code === "KeyV") this.toggleFirstPerson();
     if (e.code === "KeyG") this.toggleDevMode();
@@ -575,7 +606,7 @@ export class Game {
   };
   /** Scroll wheel cycles OWNED weapons while on foot — never in build mode. */
   private onWheel = (e: WheelEvent) => {
-    if (this.buildMode.active || this.inventoryOpen || this.craftOpen || this.tradeOpen || this.cinema.active) return;
+    if (this.buildMode.active || this.inventoryOpen || this.craftOpen || this.tradeOpen || this.playersOpen || this.cinema.active) return;
     if (this.mode !== "FOOT") return;
     this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
   };
@@ -593,7 +624,7 @@ export class Game {
     if (e.button !== 0) return;
     // While a panel is open its buttons own the clicks — re-locking the pointer
     // here would swallow the click that was meant for a backpack slot.
-    if (this.inventoryOpen || this.craftOpen || this.tradeOpen) return;
+    if (this.inventoryOpen || this.craftOpen || this.tradeOpen || this.playersOpen) return;
     if (!IS_TOUCH && document.pointerLockElement !== this.canvas) {
       this.canvas.requestPointerLock();
       return;
@@ -612,7 +643,7 @@ export class Game {
 
   /** Left click / fire button: place a piece in build mode, otherwise shoot. */
   private primary() {
-    if (this.inventoryOpen || this.craftOpen || this.tradeOpen) return; // panels own the clicks while open
+    if (this.inventoryOpen || this.craftOpen || this.tradeOpen || this.playersOpen) return; // panels own the clicks while open
     if (this.buildMode.active) {
       // every piece costs scrap from the backpack (catalog: build.ts PIECES)
       const piece = this.buildMode.piece;
@@ -628,6 +659,11 @@ export class Game {
         this.audio.build();
         this.pops.push({ obj: res.object, t: 0.16 });
         this.lastIssueCount = this.inspection.mode === "inspection" ? this.inspection.validate().issues.length : this.lastIssueCount;
+        // co-op: structures stay per-browser in v1, but the room hears about it
+        this.net?.sendEvent({
+          k: "build", n: this.net!.displayName, piece: piece.label,
+          p: [+res.position.x.toFixed(1), +res.position.z.toFixed(1)],
+        });
       }
       return;
     }
@@ -766,6 +802,7 @@ export class Game {
     this.fx.salvageBurst(c.pos.clone().add(new THREE.Vector3(0, 1, 0)));
     this.spawnRing(c.pos.clone(), 0x9fe8ff);
     this.say(`CACHE OPENED · +${fuel} FUEL CAN · +${scrap} SCRAP`, 3);
+    this.net?.sendEvent({ k: "cache", c: c.id, n: this.net!.displayName });
   }
 
   // ── SAL's barter counter ──
@@ -856,7 +893,8 @@ export class Game {
       let best: Entity | null = null;
       let bd = 18;
       for (const e of this.entities) {
-        if (e.dead || !e.hostile) continue;
+        // puppets are the host's to damage — a guest turret just tracks them
+        if (e.dead || !e.hostile || e.puppet) continue;
         const d = Math.hypot(e.group.position.x - from.x, e.group.position.z - from.z);
         if (d < bd) { bd = d; best = e; }
       }
@@ -899,7 +937,7 @@ export class Game {
         if (n <= 0) s.cooldowns.delete(e); else s.cooldowns.set(e, n);
       }
       for (const e of this.entities) {
-        if (e.dead || !e.hostile || s.cooldowns.has(e)) continue;
+        if (e.dead || !e.hostile || e.puppet || s.cooldowns.has(e)) continue;
         const d = Math.hypot(e.group.position.x - s.pos.x, e.group.position.z - s.pos.z);
         if (d > 1.2 || Math.abs(e.group.position.y - s.pos.y) > 2) continue;
         s.cooldowns.set(e, 1.0);
@@ -940,6 +978,7 @@ export class Game {
       this.loot.addDrop(e.group.position, 30);
       const got = this.player.inventory.add("medkit", 2);
       this.say(got === 2 ? "GORETUSK DOWN · +30 SCRAP DROP · +2 MEDKITS" : "GORETUSK DOWN · +30 SCRAP DROP", 3.5);
+      this.net?.sendEvent({ k: "tusk" });
     } else {
       // A kill should leave something behind, or fighting is pure cost.
       this.loot.addDrop(e.group.position, 5 + Math.floor(Math.random() * 9));
@@ -976,6 +1015,7 @@ export class Game {
   toggleInventory() {
     if (this.craftOpen) this.craftOpen = false; // one panel at a time
     if (this.tradeOpen) this.tradeOpen = false;
+    if (this.playersOpen) this.playersOpen = false;
     this.inventoryOpen = !this.inventoryOpen;
     this.audio.panel(this.inventoryOpen);
     // The cursor must be free to click slots; re-lock happens on the next
@@ -984,10 +1024,11 @@ export class Game {
   }
 
   closePanels() {
-    if (this.inventoryOpen || this.craftOpen || this.tradeOpen) this.audio.panel(false);
+    if (this.inventoryOpen || this.craftOpen || this.tradeOpen || this.playersOpen) this.audio.panel(false);
     this.inventoryOpen = false;
     this.craftOpen = false;
     this.tradeOpen = false;
+    this.playersOpen = false;
   }
 
   private openCraft() {
@@ -1114,6 +1155,344 @@ export class Game {
     if (sh.map) { sh.map.dispose(); sh.map = null; } // force re-allocation at the new size
     this.audio.ui();
     this.say(`QUALITY: ${p} · POPULATION APPLIES ON RELOAD`, 3);
+  }
+
+  // ── Multiplayer (wasteland-commons host-authoritative co-op) ──
+
+  /** Deterministic network ids for every hostile, in seeded spawn order. */
+  private assignNetIds() {
+    const counts = new Map<string, number>();
+    for (const e of this.entities) {
+      if (!e.hostile) continue;
+      const kind =
+        e === this.goretusk ? "tusk" :
+        e instanceof Boss ? "boss" :
+        e instanceof StalkerBot ? "stalker" :
+        e instanceof RunnerShambler ? "runner" :
+        e instanceof Shambler ? "zed" :
+        e instanceof SporeBoar ? "boar" :
+        e instanceof Robot ? "robot" : null;
+      if (!kind) continue;
+      const n = counts.get(kind) ?? 0;
+      counts.set(kind, n + 1);
+      const id = `${kind}:${n}`;
+      this.netIds.set(e, id);
+      this.netEntities.set(id, e);
+    }
+  }
+
+  /** True while connected to a room. */
+  get inMultiplayer() { return this.net !== null; }
+
+  /**
+   * Join (or create) a room and go co-op. Resolves true on connect; on any
+   * failure it toasts and resolves false so the caller can stay solo. The
+   * game loop never awaits any of this — join happens before the run starts.
+   */
+  async startMultiplayer(code: string, displayName: string): Promise<boolean> {
+    if (this.net) return true;
+    const net = new NetClient();
+    net.onTransform = (m) => { this.transformQueue.push(m); };
+    net.onSnapshot = (m) => { this.latestSnapshot = m; };
+    net.onEvent = (m) => { this.eventQueue.push(m); };
+    net.onRoster = (r) => this.onNetRoster(r);
+    net.onStatus = (msg) => this.say(msg, 3);
+    net.onRoleChange = (role, reason) => this.onNetRole(role, reason);
+    try {
+      await net.join(code, displayName);
+    } catch {
+      await net.leave().catch(() => {});
+      this.say("NO SIGNAL FROM THE COMMONS — PLAYING SOLO", 3.5);
+      return false;
+    }
+    this.net = net;
+    this.netRole = net.role;
+    this.remotes = new RemotePlayers(this.scene);
+    this.puppetGraceUntil = performance.now() / 1000 + 6;
+    if (this.netRole === "GUEST") {
+      // Host authority: hostiles become position-driven puppets. Anything the
+      // host's snapshots never mention un-puppets itself after the grace
+      // window (population budgets can differ across device tiers).
+      for (const e of this.entities) if (e.hostile) e.puppet = true;
+    }
+    this.prevRoster.clear();
+    this.onNetRoster(net.roster);
+    this.say(`CONNECTED · ${net.worldId} · YOU ARE ${this.netRole}${this.netRole === "HOST" ? " 👑" : ""}`, 3.5);
+    return true;
+  }
+
+  /** LEAVE button / panel close: back to a purely local wasteland. */
+  leaveMultiplayer() {
+    const net = this.net;
+    if (!net) return;
+    this.net = null;
+    this.netRole = null;
+    if (this.playersOpen) { this.playersOpen = false; this.audio.panel(false); }
+    void net.leave();
+    this.remotes?.dispose();
+    this.remotes = null;
+    this.transformQueue.length = 0;
+    this.eventQueue.length = 0;
+    this.latestSnapshot = null;
+    this.netTargets.clear();
+    // guest-materialised wave puppets leave with the session
+    for (const e of this.guestSpawned) {
+      this.scene.remove(e.group);
+      const id = this.netIds.get(e);
+      if (id) { this.netIds.delete(e); this.netEntities.delete(id); }
+    }
+    this.entities = this.entities.filter((e) => !this.guestSpawned.has(e));
+    this.guestSpawned.clear();
+    for (const e of this.entities) e.puppet = false;
+    this.prevRoster.clear();
+    this.say("LEFT THE COMMONS", 2.5);
+  }
+
+  /** Players panel (U on PC, 👥 in the thumb arc). */
+  togglePlayers() {
+    if (!this.net) return;
+    this.playersOpen = !this.playersOpen;
+    if (this.playersOpen) { // one panel at a time
+      this.inventoryOpen = false;
+      this.craftOpen = false;
+      this.tradeOpen = false;
+    }
+    this.audio.panel(this.playersOpen);
+    if (this.playersOpen && !IS_TOUCH) document.exitPointerLock?.();
+  }
+
+  /** 📡 one-shot ping to the room — the v1 "chat". */
+  sendPing() {
+    if (!this.net) return;
+    this.net.sendEvent({ k: "ping", n: this.net.displayName });
+    this.audio.ui();
+    this.say("📡 PING SENT", 1.5);
+  }
+
+  private onNetRoster(r: RosterEntry[]) {
+    if (!this.net) return;
+    for (const p of r) {
+      if (!this.prevRoster.has(p.id) && p.id !== this.net.playerId) this.say(`${p.name} JOINED THE COMMONS`, 2.5);
+    }
+    for (const [id, name] of this.prevRoster) {
+      if (!r.some((p) => p.id === id)) this.say(`${name} LEFT THE COMMONS`, 2.5);
+    }
+    this.prevRoster = new Map(r.map((p) => [p.id, p.name]));
+    this.remotes?.syncRoster(r);
+  }
+
+  private onNetRole(role: NetRole, reason: "claimed" | "failover" | "lost") {
+    this.netRole = role;
+    if (role === "HOST") {
+      // local sim takes over from wherever the puppets stand
+      for (const e of this.entities) e.puppet = false;
+      this.netTargets.clear();
+      this.say(reason === "failover" ? "HOST LOST — YOU NOW RUN THE WORLD 👑" : "YOU ARE HOST 👑", 3.5);
+    } else if (reason === "lost") {
+      for (const e of this.entities) if (e.hostile) e.puppet = true;
+    }
+  }
+
+  /** Guest: apply one host entity snapshot (drained in tick, never async). */
+  private applySnapshot(snap: EntSnapshotMsg, now: number) {
+    for (const [id, x, y, z, yaw, hp, dead] of snap.e) {
+      let ent = this.netEntities.get(id);
+      if (!ent && (id.startsWith("wz:") || id.startsWith("wr:"))) {
+        // A wave-night hostile the host spawned — materialise a local puppet.
+        const pos = new THREE.Vector3(x, y, z);
+        ent = id.startsWith("wr:") ? new RunnerShambler(pos, 900) : new Shambler(pos);
+        ent.puppet = true;
+        this.entities.push(ent);
+        this.scene.add(ent.group);
+        this.netIds.set(ent, id);
+        this.netEntities.set(id, ent);
+        this.guestSpawned.add(ent);
+      }
+      if (!ent) continue;
+      const prev = this.netTargets.get(id);
+      const spd = prev ? Math.min(15, Math.hypot(x - prev.x, z - prev.z) / Math.max(0.03, now - prev.seen)) : 0;
+      if (dead === 1 && !ent.dead) {
+        ent.hp = 0;
+        ent.damage(0); // hp is 0 — this lands the class-specific death pose
+        this.onRemoteKill(ent);
+      } else if (dead !== 1) {
+        ent.hp = hp;
+      }
+      this.netTargets.set(id, { x, y, z, yaw, spd, dead: dead === 1, seen: now });
+    }
+    // Sealed caches opened on the host side stay opened here (self-heal).
+    for (const cid of snap.c) {
+      const c = this.caches.find((x) => x.id === cid);
+      if (c && !c.opened) {
+        c.opened = true;
+        this.scene.remove(c.marker);
+      }
+    }
+  }
+
+  /** A hostile died on the host: local kill feed, gore and score. */
+  private onRemoteKill(e: Entity) {
+    this.kills += 1;
+    this.audio.robotDeath();
+    this.fx.wreck(e.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)));
+  }
+
+  /** Guest: drive one puppet toward its snapshot target. */
+  private drivePuppet(e: Entity, dt: number) {
+    const id = this.netIds.get(e);
+    const t = id ? this.netTargets.get(id) : undefined;
+    if (!t || e.dead) return;
+    const p = e.group.position;
+    if (Math.hypot(t.x - p.x, t.y - p.y, t.z - p.z) > 15) {
+      p.set(t.x, t.y, t.z); // teleport — never rubber-band across the map
+      e.group.rotation.y = t.yaw;
+    } else {
+      p.x = THREE.MathUtils.damp(p.x, t.x, 10, dt);
+      p.y = THREE.MathUtils.damp(p.y, t.y, 10, dt);
+      p.z = THREE.MathUtils.damp(p.z, t.z, 10, dt);
+      let dy = t.yaw - e.group.rotation.y;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      e.group.rotation.y += THREE.MathUtils.clamp(dy, -6 * dt, 6 * dt);
+    }
+    e.puppetAnimate?.(dt, t.spd);
+  }
+
+  /** Inbound one-shot events (drained in tick). */
+  private handleNetEvent(m: EventMsg) {
+    switch (m.k) {
+      case "shot": {
+        // Host only (net.ts already filtered): a guest's hit lands here.
+        if (this.netRole !== "HOST") break;
+        const ent = typeof m.id === "string" ? this.netEntities.get(m.id) : undefined;
+        const dmg = typeof m.d === "number" ? THREE.MathUtils.clamp(m.d, 1, 120) : 0;
+        if (!ent || ent.dead || dmg <= 0) break;
+        const from = typeof m.by === "string" ? this.remotes?.positionOf(m.by) : null;
+        const at = ent.group.position.clone().add(new THREE.Vector3(0, 0.9, 0));
+        if (from) this.spawnTracer(from.clone().add(new THREE.Vector3(0, 1.4, 0)), at, 0x9fe8ff);
+        this.fx.impact(at, new THREE.Vector3(0, 1, 0));
+        ent.damage(dmg);
+        if (ent.dead) this.onHostileKilled(ent);
+        break;
+      }
+      case "cache": {
+        const c = typeof m.c === "string" ? this.caches.find((x) => x.id === m.c) : undefined;
+        if (c && !c.opened) {
+          c.opened = true;
+          this.scene.remove(c.marker);
+        }
+        if (typeof m.n === "string") this.say(`${m.n} OPENED A SUPPLY CACHE 💠`, 2.5);
+        break;
+      }
+      case "wave+":
+        if (this.netRole === "GUEST") {
+          this.waveActive = true; // banner; the horde itself arrives by snapshot
+          this.audio.waveHorn();
+          this.say("WAVE NIGHT — THE HORDE COMES FOR THE BASE", 4);
+        }
+        break;
+      case "wave-":
+        if (this.netRole === "GUEST") this.waveActive = false;
+        break;
+      case "tusk":
+        this.say("GORETUSK ALPHA IS DOWN", 3.5);
+        break;
+      case "build": {
+        if (typeof m.n === "string" && Array.isArray(m.p)) {
+          const [x, z] = m.p as [number, number];
+          this.spawnRing(new THREE.Vector3(x, heightAt(x, z), z), 0x9fe8ff);
+          this.say(`${m.n} PLACED ${String(m.piece ?? "A PIECE")}`, 2.5);
+        }
+        break;
+      }
+      case "ping":
+        this.audio.ui();
+        if (typeof m.n === "string") this.say(`📡 PING — ${m.n}`, 2.5);
+        break;
+    }
+  }
+
+  /** Per-frame multiplayer pump — called from tick, never awaited. */
+  private netTick(dt: number) {
+    const net = this.net;
+    if (!net) return;
+    const now = performance.now() / 1000;
+
+    // inbound: remote player transforms
+    if (this.transformQueue.length) {
+      for (const m of this.transformQueue) this.remotes?.pushTransform(m, now);
+      this.transformQueue.length = 0;
+    }
+    this.remotes?.update(dt, now);
+
+    // inbound: host entity snapshot (guests only; keep only the freshest)
+    const snap = this.latestSnapshot;
+    if (snap) {
+      this.latestSnapshot = null;
+      if (this.netRole === "GUEST") this.applySnapshot(snap, now);
+    }
+
+    // inbound: events
+    if (this.eventQueue.length) {
+      for (const m of this.eventQueue) this.handleNetEvent(m);
+      this.eventQueue.length = 0;
+    }
+
+    // outbound: own transform at 10 Hz
+    this.netSendT -= dt;
+    if (this.netSendT <= 0) {
+      this.netSendT = 0.1;
+      const p = this.player.position;
+      net.sendTransform({
+        id: net.playerId,
+        n: net.displayName,
+        p: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)],
+        y: +this.player.group.rotation.y.toFixed(2),
+        c: +this.player.camPitch.toFixed(2),
+        m: this.mode,
+        w: this.currentWeapon,
+        g: +this.player.gait.toFixed(1),
+      });
+    }
+
+    // outbound: host entity snapshot at 8 Hz
+    if (this.netRole === "HOST") {
+      this.netSnapT -= dt;
+      if (this.netSnapT <= 0) {
+        this.netSnapT = 0.125;
+        const e: EntEntry[] = [];
+        for (const [ent, id] of this.netIds) {
+          const gp = ent.group.position;
+          e.push([id, +gp.x.toFixed(1), +gp.y.toFixed(1), +gp.z.toFixed(1),
+            +ent.group.rotation.y.toFixed(2), Math.round(ent.hp), ent.dead ? 1 : 0]);
+        }
+        net.sendSnapshot({ e, c: this.caches.filter((c) => c.opened).map((c) => c.id) });
+      }
+    }
+
+    // once a second: housekeeping on the guest side
+    if (this.netRole === "GUEST" && now % 1 < dt) {
+      // puppets the host never mentions (tier population mismatch) resume local AI
+      if (now > this.puppetGraceUntil) {
+        for (const ent of this.entities) {
+          if (!ent.puppet) continue;
+          const id = this.netIds.get(ent);
+          if (id && !this.netTargets.has(id)) ent.puppet = false;
+        }
+      }
+      // wave puppets the host stopped reporting are struck from the field
+      for (const ent of Array.from(this.guestSpawned)) {
+        const id = this.netIds.get(ent);
+        const t = id ? this.netTargets.get(id) : undefined;
+        if (!id || !t || now - t.seen > 6) {
+          this.scene.remove(ent.group);
+          this.entities = this.entities.filter((x) => x !== ent);
+          if (id) { this.netIds.delete(ent); this.netEntities.delete(id); }
+          if (id) this.netTargets.delete(id);
+          this.guestSpawned.delete(ent);
+        }
+      }
+    }
   }
 
   // ── Save / load (Batch 2 item 16) ──
@@ -1479,10 +1858,16 @@ export class Game {
       this.entities.push(zed);
       this.scene.add(zed.group);
       this.waveSet.add(zed);
+      // network id is deterministic per night + slot, so guests materialise
+      // the same horde member when the host's snapshot names it
+      const wid = `${i < runners ? "wr" : "wz"}:${this.nightIndex}:${i}`;
+      this.netIds.set(zed, wid);
+      this.netEntities.set(wid, zed);
     }
     this.waveActive = true;
     this.audio.waveHorn();
     this.say("WAVE NIGHT — THE HORDE COMES FOR THE BASE", 4);
+    if (this.netRole === "HOST") this.net?.sendEvent({ k: "wave+" });
   }
 
   /** Dawn or a wiped wave: survivors revert to ordinary shamblers. */
@@ -1494,6 +1879,7 @@ export class Game {
     }
     this.waveSet.clear();
     this.waveActive = false;
+    if (this.netRole === "HOST") this.net?.sendEvent({ k: "wave-" });
   }
 
   /**
@@ -1609,8 +1995,15 @@ export class Game {
       if (pi === 0) this.spawnTracer(origin, end, this.mode === "MECH" ? 0xffaa33 : w!.tracer);
       if (best) {
         this.fx.impact(end, dir.clone().negate());
-        best.e.damage(dmg);
-        if (best.e.dead) this.onHostileKilled(best.e);
+        if (this.net && this.netRole === "GUEST") {
+          // Host authority: the hit is reported, not applied. The host damages
+          // the entity and the result comes back in the next snapshot.
+          const nid = this.netIds.get(best.e);
+          if (nid) this.net.hitEntity(nid, dmg);
+        } else {
+          best.e.damage(dmg);
+          if (best.e.dead) this.onHostileKilled(best.e);
+        }
       }
     }
   }
@@ -1697,9 +2090,13 @@ export class Game {
 
     // entities think, work, and hunt; contact hurts
     if (this.waveActive) this.applyWaveRepulsion();
+    // Multiplayer pump: drain inbound queues, drive puppets, send outbound
+    // snapshots — all inside the loop, never from a network callback.
+    this.netTick(dt);
     const pp = this.player.position;
     for (const e of this.entities) {
-      e.update(dt, pp);
+      if (e.puppet) this.drivePuppet(e, dt); // guest: host-driven, no local AI
+      else e.update(dt, pp);
       if (!e.dead && e.hostile && e.group.position.distanceTo(pp) < e.radius + 0.6) {
         this.damagePlayer(dt * (e instanceof Boss ? 30 : 8));
       }
@@ -1827,12 +2224,14 @@ export class Game {
       const night = this.sky.nightness > 0.5;
       if (night && !this.wasNight) {
         this.nightIndex += 1;
-        if (this.nightIndex % 3 === 0) this.startWave();
+        // guests never spawn their own horde — the host's waves arrive as
+        // snapshot-materialised puppets, announced by the wave+ event
+        if (this.netRole !== "GUEST" && this.nightIndex % 3 === 0) this.startWave();
       } else if (!night && this.wasNight && this.waveActive) {
         this.endWave();
       }
       this.wasNight = night;
-      if (this.waveActive) {
+      if (this.waveActive && this.netRole !== "GUEST") {
         let alive = 0;
         for (const e of this.waveSet) if (!e.dead) alive++;
         if (alive === 0) this.endWave();
@@ -1968,12 +2367,20 @@ export class Game {
       },
       hasWeapons: this.ownedWeapons().length > 1,
       quality: this.quality,
+      mp: this.net && this.netRole
+        ? { code: this.net.worldId, role: this.netRole, selfId: this.net.playerId, players: this.net.roster }
+        : null,
+      playersOpen: this.playersOpen,
     });
   };
 
   dispose() {
     this.disposed = true;
     this.renderer.setAnimationLoop(null);
+    void this.net?.leave();
+    this.net = null;
+    this.remotes?.dispose();
+    this.remotes = null;
     window.removeEventListener("resize", this.resize);
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);

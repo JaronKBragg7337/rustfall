@@ -7,6 +7,7 @@ import { IS_TOUCH, type QualityPreset } from "@/game/constants";
 import { ITEMS, SLOT_COUNT } from "@/game/inventory";
 import { RECIPES } from "@/game/weapons";
 import { TRADE_OFFERS } from "@/game/trade";
+import { DISPLAY_NAME_KEY, generateRoomCode } from "@/game/net";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +22,7 @@ const INITIAL_HUD: HudState = {
   inventory: new Array(SLOT_COUNT).fill(null), inventoryOpen: false, craftOpen: false,
   tradeOpen: false, goretusk: null, turretHint: null,
   weapon: { id: "pulse", name: "PULSE SIDEARM", glyph: "🔫" }, hasWeapons: false, quality: "AUTO",
+  mp: null, playersOpen: false,
 };
 
 /**
@@ -60,6 +62,13 @@ export default function App() {
   // Item 16: the start screen gates on these — Continue only when a valid save exists.
   const [started, setStarted] = useState(false);
   const [saveAvailable, setSaveAvailable] = useState(false);
+  // Multiplayer lobby: name persists per browser; codes are 5-letter room keys.
+  const [mpName, setMpName] = useState(() => {
+    try { return localStorage.getItem(DISPLAY_NAME_KEY) ?? ""; } catch { return ""; }
+  });
+  const [mpCode, setMpCode] = useState("");
+  const [mpBusy, setMpBusy] = useState(false);
+  const [mpError, setMpError] = useState("");
 
   useEffect(() => {
     const game = new Game(canvasRef.current!);
@@ -76,6 +85,29 @@ export default function App() {
   const setLayer = useCallback((inspection: boolean) => {
     gameRef.current?.setLayer(inspection ? "inspection" : "game");
   }, []);
+
+  /**
+   * CREATE / JOIN ROOM. The join is awaited BEFORE the run starts so a dead
+   * signal never erases a solo save — fail soft: stay on the start screen,
+   * say why, and let the player pick a solo run instead.
+   */
+  const startMp = useCallback(async (code: string) => {
+    const gm = gameRef.current;
+    if (!gm || mpBusy) return;
+    setMpBusy(true);
+    setMpError("");
+    const name = (mpName.trim() || "DRIFTER").toUpperCase();
+    try { localStorage.setItem(DISPLAY_NAME_KEY, name); } catch { /* storageless */ }
+    const ok = await gm.startMultiplayer(code, name);
+    if (ok) {
+      gm.startNewRun(); // co-op runs boot the shared seeded world fresh
+      setStarted(true);
+      setSaveAvailable(false);
+    } else {
+      setMpError("NO SIGNAL FROM THE COMMONS — CHECK CONNECTION, OR PLAY SOLO");
+    }
+    setMpBusy(false);
+  }, [mpBusy, mpName]);
 
   const g = () => gameRef.current;
   const joyVisible = IS_TOUCH && touch?.joyActive;
@@ -122,6 +154,46 @@ export default function App() {
               NEW GAME ERASES THE SAVED RUN
             </div>
           )}
+
+          {/* ── MULTIPLAYER: display-name join, no accounts ── */}
+          <div className="mt-7 w-56 sm:w-64">
+            <div className="text-[9px] sm:text-[10px] tracking-[0.3em] text-zinc-500 mb-2">
+              MULTIPLAYER · WASTELAND COMMONS
+            </div>
+            <input
+              value={mpName}
+              onChange={(e) => setMpName(e.target.value.toUpperCase().replace(/[^A-Z0-9 \-]/g, "").slice(0, 14))}
+              placeholder="DISPLAY NAME"
+              className="w-full mb-2 px-2 py-2 rounded border border-zinc-700 bg-zinc-900/80 text-cyan-100
+                         text-[11px] tracking-[0.25em] text-center outline-none focus:border-cyan-400 placeholder:text-zinc-600"
+            />
+            <button
+              onPointerDown={() => void startMp(generateRoomCode())}
+              disabled={mpBusy}
+              className="w-full py-2.5 rounded-md border border-cyan-500/70 bg-cyan-500/10 text-cyan-200
+                         text-[11px] tracking-[0.25em] font-bold active:bg-cyan-500/25 disabled:opacity-50">
+              {mpBusy ? "CONNECTING…" : "▸ CREATE ROOM"}
+            </button>
+            <div className="flex gap-1.5 mt-2">
+              <input
+                value={mpCode}
+                onChange={(e) => setMpCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5))}
+                placeholder="CODE"
+                className="w-20 px-2 py-2 rounded border border-zinc-700 bg-zinc-900/80 text-cyan-100
+                           text-[11px] tracking-[0.3em] text-center outline-none focus:border-cyan-400 placeholder:text-zinc-600"
+              />
+              <button
+                onPointerDown={() => { if (mpCode.length >= 4) void startMp(mpCode); }}
+                disabled={mpBusy || mpCode.length < 4}
+                className="flex-1 py-2 rounded-md border border-zinc-600 bg-zinc-900/70 text-zinc-200
+                           text-[11px] tracking-[0.25em] font-bold active:bg-zinc-700/60 disabled:opacity-40">
+                JOIN ROOM
+              </button>
+            </div>
+            {mpError && (
+              <div className="mt-2 text-[9px] tracking-widest text-red-400 leading-snug">{mpError}</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -421,7 +493,8 @@ export default function App() {
                 <span className="text-zinc-300">CTRL</span> crouch · <span className="text-zinc-300">CLICK</span> fire · <span className="text-zinc-300">E</span> use/craft ·{" "}
                 <span className="text-zinc-300">TAB/I</span> backpack · <span className="text-zinc-300">7/8/0</span> weapons · <span className="text-zinc-300">SCROLL</span> cycle ·{" "}
                 <span className="text-zinc-300">Q</span> seat · <span className="text-zinc-300">B</span> build · <span className="text-zinc-300">1-6</span> piece ·{" "}
-                <span className="text-zinc-300">R</span> rotate · <span className="text-zinc-300">M</span> mech bay · <span className="text-zinc-300">L</span> layer</>
+                <span className="text-zinc-300">R</span> rotate · <span className="text-zinc-300">M</span> mech bay · <span className="text-zinc-300">L</span> layer ·{" "}
+                <span className="text-zinc-300">U</span> team (multiplayer)</>
               )}
             </div>
           )}
@@ -676,6 +749,63 @@ export default function App() {
         </div>
       )}
 
+      {/* ── PLAYERS panel (U / 👥) — same one-owner-per-pointer contract as
+              the backpack: DOM above the canvas, backdrop tap closes. ── */}
+      {hud.mp && hud.playersOpen && !hud.cinematic && (
+        <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center"
+             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+             onPointerDown={() => g()?.togglePlayers()}>
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="w-[min(24rem,calc(100vw-1rem))] rounded-md border border-cyan-700/70 bg-zinc-950/95
+                       p-3 sm:p-4 text-zinc-200 shadow-2xl mb-2 sm:mb-0">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] sm:text-xs font-bold tracking-[0.25em] text-cyan-300">👥 WASTELAND COMMONS</div>
+              <button onPointerDown={() => g()?.togglePlayers()}
+                className="w-8 h-8 -mr-1 rounded text-zinc-400 hover:text-zinc-100 text-base leading-none">✕</button>
+            </div>
+            {/* the room code is the whole invitation — make it impossible to miss */}
+            <div className="rounded border border-cyan-800 bg-cyan-950/30 px-3 py-2 mb-2 text-center">
+              <div className="text-2xl font-black tracking-[0.45em] text-cyan-200 pl-2">{hud.mp.code}</div>
+              <div className="text-[8px] sm:text-[9px] tracking-[0.3em] text-zinc-500 mt-0.5">
+                SHARE THIS CODE · {hud.mp.role === "HOST" ? "YOU RUN THE WORLD 👑" : "HOST RUNS THE WORLD"}
+              </div>
+            </div>
+            {hud.mp.players.map((p) => (
+              <div key={p.id}
+                className="flex items-center gap-2 rounded border border-zinc-700 bg-zinc-900/50 px-2 py-1.5 mb-1">
+                <span className="w-5 text-center text-sm leading-none">{p.host ? "👑" : "·"}</span>
+                <span className="text-[11px] sm:text-xs font-bold tracking-widest text-zinc-100 truncate">{p.name}</span>
+                {p.id === hud.mp!.selfId && (
+                  <span className="ml-auto text-[8px] tracking-widest text-cyan-400 shrink-0">YOU</span>
+                )}
+                {p.host && p.id !== hud.mp!.selfId && (
+                  <span className="ml-auto text-[8px] tracking-widest text-amber-400 shrink-0">HOST</span>
+                )}
+              </div>
+            ))}
+            <div className="flex gap-1.5 mt-2">
+              <button
+                onPointerDown={(e) => { e.stopPropagation(); g()?.sendPing(); }}
+                className="flex-1 py-2 rounded border border-cyan-700 text-cyan-200 text-[10px] sm:text-[11px]
+                           tracking-widest font-bold active:bg-cyan-500/20">
+                📡 PING
+              </button>
+              <button
+                onPointerDown={(e) => { e.stopPropagation(); g()?.leaveMultiplayer(); }}
+                className="flex-1 py-2 rounded border border-red-800 text-red-300 text-[10px] sm:text-[11px]
+                           tracking-widest font-bold active:bg-red-500/20">
+                🚪 LEAVE
+              </button>
+            </div>
+            <div className="mt-2 text-[9px] sm:text-[10px] text-zinc-500 leading-snug">
+              {IS_TOUCH ? "👥 opens this panel." : "[U] opens this panel."} If the host drops, a drifter
+              takes over the world automatically.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── TOUCH: floating joystick, drawn where the thumb landed ── */}
       {joyVisible && touch && (
         <div className="absolute z-20 pointer-events-none" style={{ left: touch.joyOx, top: touch.joyOy, transform: "translate(-50%,-50%)" }}>
@@ -689,7 +819,7 @@ export default function App() {
 
       {/* ── TOUCH: action cluster, placed in the right thumb's natural arc ──
               Hidden while a panel (backpack / workbench) owns the screen. */}
-      {IS_TOUCH && ready && !hud.cinematic && !hud.inventoryOpen && !hud.craftOpen && !hud.tradeOpen && (
+      {IS_TOUCH && ready && !hud.cinematic && !hud.inventoryOpen && !hud.craftOpen && !hud.tradeOpen && !hud.playersOpen && (
         <div className="absolute z-30 right-3 bottom-5" style={{ paddingRight: "env(safe-area-inset-right)", paddingBottom: "env(safe-area-inset-bottom)" }}>
           <div className="relative w-40 h-40">
             <TouchBtn label="FIRE" className="absolute right-0 bottom-8 w-[68px] h-[68px] text-[11px]"
@@ -705,6 +835,9 @@ export default function App() {
           </div>
           {/* contextual extras only when they apply, so the screen stays clear */}
           <div className="absolute right-[168px] bottom-6 flex flex-col gap-2">
+            {hud.mp && (
+              <TouchBtn label="👥" sub="TEAM" className="w-12 h-12 text-sm" onDown={() => g()?.togglePlayers()} />
+            )}
             {hud.building && (
               <TouchBtn label="↻" sub="ROT" className="w-12 h-12 text-sm" onDown={() => g()?.rotatePiece()} />
             )}

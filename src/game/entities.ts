@@ -20,6 +20,15 @@ export interface Entity {
   hostile: boolean;
   dead: boolean;
   radius: number;
+  /**
+   * Multiplayer (guest side): while true the entity is a host-driven puppet —
+   * the engine skips update() (AI, movement, attacks) and drives the transform
+   * from snapshots, calling puppetAnimate() for the local gait. Undefined/
+   * false everywhere in solo play, which keeps the solo sim byte-identical.
+   */
+  puppet?: boolean;
+  /** Guest-side gait/idle animation while puppeted. No movement, no attacks. */
+  puppetAnimate?(dt: number, speed: number): void;
   update(dt: number, playerPos: THREE.Vector3): void;
   damage(n: number): void;
 }
@@ -333,6 +342,15 @@ export class Robot implements Entity {
       (this.eye.material as THREE.MeshStandardMaterial).emissiveIntensity = 0;
     }
   }
+
+  /** Guest puppet: tracks roll and the sensor head scans, but the host steers. */
+  puppetAnimate(dt: number, speed: number) {
+    if (this.dead) return;
+    this.bobPhase += dt;
+    this.travelled += speed * dt;
+    for (const w of this.wheels) w.rotation.y = -this.travelled * 5.4;
+    this.turret.rotation.y = Math.sin(this.bobPhase * 0.7) * 0.5;
+  }
 }
 
 // ─────────────────────────────── STALKER ROBOT ───────────────────────────────
@@ -513,6 +531,16 @@ export class StalkerBot implements Entity {
       this.muzzleMat.emissiveIntensity = 0;
     }
   }
+
+  /** Guest puppet: tracks roll, but the laser never charges — the host aims. */
+  puppetAnimate(dt: number, speed: number) {
+    if (this.dead) return;
+    this.bobPhase += dt;
+    this.travelled += speed * dt;
+    for (const w of this.wheels) w.rotation.y = -this.travelled * 5.4;
+    this.laserMat.opacity = 0;
+    this.muzzleMat.emissiveIntensity = 0.4;
+  }
 }
 
 // ─────────────────────────────── SHAMBLER ───────────────────────────────
@@ -580,6 +608,13 @@ export class Shambler implements Entity {
       this.group.rotation.x = -Math.PI / 2;
       this.group.position.y = heightAt(this.group.position.x, this.group.position.z) + 0.25;
     }
+  }
+
+  /** Guest puppet: the lurch keeps lurching, over ground the host reports. */
+  puppetAnimate(dt: number, speed: number) {
+    if (this.dead) return;
+    this.moving = THREE.MathUtils.damp(this.moving, speed, 6, dt);
+    this.body.shamble(dt, this.moving);
   }
 }
 
@@ -667,6 +702,15 @@ export class RunnerShambler implements Entity {
       this.group.rotation.x = -Math.PI / 2;
       this.group.position.y = heightAt(this.group.position.x, this.group.position.z) + 0.25;
     }
+  }
+
+  /** Guest puppet: the sprint cycle runs, the zig-zag is the host's business. */
+  puppetAnimate(dt: number, speed: number) {
+    if (this.dead) return;
+    this.moving = THREE.MathUtils.damp(this.moving, speed, 6, dt);
+    this.body.animate(dt, this.moving, this.speed);
+    // the signature hunch, same as the local update applies
+    this.body.chest.rotation.x += 0.28;
   }
 }
 
@@ -964,6 +1008,26 @@ export class SporeBoar implements Entity {
       this.group.position.y = heightAt(this.group.position.x, this.group.position.z) + 0.3;
       this.pustuleMat.emissiveIntensity = 0.1;
     }
+  }
+
+  /** Guest puppet: trot gait and throbbing pustules; the host calls the charges. */
+  puppetAnimate(dt: number, speed: number) {
+    if (this.dead) return;
+    this.bodyPhase += dt;
+    this.moving = THREE.MathUtils.damp(this.moving, speed, 6, dt);
+    const gait = Math.min(1, this.moving / this.chargeSpeed);
+    this.gaitPhase += dt * (2.4 + this.moving * 1.7);
+    const swing = (0.3 + gait * 0.4) * (this.moving > 0.1 ? 1 : 0);
+    const s = Math.sin(this.gaitPhase);
+    // diagonal pairs, like a real trot
+    this.legs[0].rotation.x = s * swing;
+    this.legs[3].rotation.x = s * swing;
+    this.legs[1].rotation.x = -s * swing;
+    this.legs[2].rotation.x = -s * swing;
+    this.head.rotation.x = THREE.MathUtils.damp(
+      this.head.rotation.x, 0.06 + Math.sin(this.bodyPhase * 1.7) * 0.05, 8, dt
+    );
+    this.pustuleMat.emissiveIntensity = 0.75 + Math.sin(this.bodyPhase * 2.6) * 0.45;
   }
 }
 
@@ -1296,6 +1360,23 @@ export class Boss implements Entity {
       this.group.position.y = heightAt(this.group.position.x, this.group.position.z) + 1.2;
       (this.core.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.2;
     }
+  }
+
+  /** Guest puppet: the stomp gait and core pulse; the host walks it. */
+  puppetAnimate(dt: number, speed: number) {
+    if (this.dead) return;
+    this.phase += dt * 2.2;
+    this.stride += speed * dt;
+    const moving = speed > 0.2 ? 1 : 0;
+    const s = Math.sin(this.stride * 1.5);
+    const beat = Math.floor((this.stride * 1.5) / Math.PI);
+    if (moving && beat !== this.lastStompBeat) {
+      this.lastStompBeat = beat;
+      this.onStomp?.();
+    }
+    this.hipL.rotation.x = -s * 0.42 * moving;
+    this.hipR.rotation.x = s * 0.42 * moving;
+    (this.core.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.3 + Math.sin(this.phase * 3) * 0.6;
   }
 }
 
