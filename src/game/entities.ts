@@ -708,10 +708,21 @@ export class SporeBoar implements Entity {
   private torso: THREE.Group;
   private legs: THREE.Group[] = [];
   private pustuleMat: THREE.MeshStandardMaterial;
+  /** Tunables — the GORETUSK ALPHA variant drives these from constructor opts. */
+  private chargeSpeed = 12;
+  private aggroRange = 12;
+  private role = "feral spore-boar";
 
-  constructor(pos: THREE.Vector3, seed = 3300) {
+  constructor(pos: THREE.Vector3, seed = 3300, opts: {
+    scale?: number; hp?: number; chargeSpeed?: number; aggroRange?: number; role?: string;
+  } = {}) {
     this.rng = makeRng(seed);
     this.bodyPhase = this.rng() * 6.28;
+    if (opts.hp) { this.hp = opts.hp; this.maxHp = opts.hp; }
+    if (opts.chargeSpeed) this.chargeSpeed = opts.chargeSpeed;
+    if (opts.aggroRange) this.aggroRange = opts.aggroRange;
+    if (opts.role) this.role = opts.role;
+    if (opts.scale) this.radius = 1.2 * opts.scale;
 
     const flesh = surface("CRV01", { local: true, tile: 1.1, grime: 0.4, grimeHeight: 0.6 });
     const bone = surface("CRV02", { local: true, tile: 0.9 });
@@ -808,9 +819,10 @@ export class SporeBoar implements Entity {
     }
 
     this.group.position.copy(pos);
+    if (opts.scale) this.group.scale.setScalar(opts.scale);
     shadowed(this.group);
     this.pickWaypoint();
-    registerAsset("feral spore-boar", this.group, "BST");
+    registerAsset(this.role, this.group, "BST");
   }
 
   private pickWaypoint() {
@@ -843,7 +855,7 @@ export class SporeBoar implements Entity {
 
     switch (this.state) {
       case "roam": {
-        if (distP < 12 && this.cooldown <= 0) {
+        if (distP < this.aggroRange && this.cooldown <= 0) {
           // snort + paw: the warning before the violence
           this.state = "paw";
           this.stateT = 1.0;
@@ -879,10 +891,10 @@ export class SporeBoar implements Entity {
       }
       case "charge": {
         this.group.rotation.y = Math.atan2(this.chargeDir.x, this.chargeDir.z);
-        p.addScaledVector(this.chargeDir, 12 * dt);
-        this.chargeTravel += 12 * dt;
-        this.moving = 12;
-        if (!this.hitThisCharge && distP < 1.4) {
+        p.addScaledVector(this.chargeDir, this.chargeSpeed * dt);
+        this.chargeTravel += this.chargeSpeed * dt;
+        this.moving = this.chargeSpeed;
+        if (!this.hitThisCharge && distP < this.radius + 0.2) {
           this.hitThisCharge = true;
           this.onHit?.(this.chargeDir.clone());
           // got its gore — shakes it off, then loses interest for a while
@@ -914,7 +926,7 @@ export class SporeBoar implements Entity {
     }
 
     // ── gait ──
-    const gait = Math.min(1, this.moving / 12);
+    const gait = Math.min(1, this.moving / this.chargeSpeed);
     this.gaitPhase += dt * (2.4 + this.moving * 1.7);
     const swing = (0.30 + gait * 0.40) * (this.moving > 0.1 ? 1 : 0);
     if (this.state === "paw") {
@@ -1003,6 +1015,67 @@ export class Helper {
         this.group.rotation.y += THREE.MathUtils.clamp(dy, -6 * dt, 6 * dt);
         p.addScaledVector(dir, 1.9 * dt);
         this.moving = 1.9;
+      }
+    }
+    this.body.animate(dt, this.moving, 7.4);
+    p.y = heightAt(p.x, p.z);
+  }
+}
+
+// ─────────────────────────────── TRADER NPC ───────────────────────────────
+// SAL the Trader — a Helper-style NPC anchored to the trading-post stall.
+// Unlike the base helpers he never roams a route: he shuffles between two
+// stations inside the stall footprint, so he reads as minding the counter
+// rather than wandering off with the shop.
+const TRADER_STYLE: HumanoidStyle = {
+  jacket: "STR02", trousers: "CRV06", boots: "CRV03",
+  skin: 0xa87c52, accent: 0x4a90c2, height: 1.76, backpack: true,
+};
+
+export class Trader {
+  group = new THREE.Group();
+  readonly name: string;
+  private stations: THREE.Vector3[];
+  private idx = 0;
+  private wait = 2; // opens standing still at the counter
+  private body: Humanoid;
+  private moving = 0;
+
+  constructor(pos: THREE.Vector3, stations: THREE.Vector3[], name: string) {
+    this.name = name;
+    this.stations = stations;
+    this.body = new Humanoid(TRADER_STYLE);
+    this.group.add(this.body.group);
+    this.group.position.copy(pos);
+    this.group.position.y = heightAt(pos.x, pos.z);
+    shadowed(this.group);
+    const tag = makeTag(`${name} · TRADER`, "#d8a13a");
+    tag.position.y = 2.15;
+    this.group.add(tag);
+    registerAsset("npc trader", this.group, "NPC");
+  }
+
+  /** Same idle vocabulary as Helper.update, just a much shorter leash. */
+  update(dt: number) {
+    const p = this.group.position;
+    if (this.wait > 0) {
+      this.wait -= dt;
+      this.moving = THREE.MathUtils.damp(this.moving, 0, 6, dt);
+    } else {
+      const dest = this.stations[this.idx];
+      const dir = new THREE.Vector3(dest.x - p.x, 0, dest.z - p.z);
+      if (dir.length() < 0.3) {
+        this.wait = 3.5 + Math.random() * 4;
+        this.idx = (this.idx + 1) % this.stations.length;
+      } else {
+        dir.normalize();
+        const targetYaw = Math.atan2(dir.x, dir.z);
+        let dy = targetYaw - this.group.rotation.y;
+        while (dy > Math.PI) dy -= Math.PI * 2;
+        while (dy < -Math.PI) dy += Math.PI * 2;
+        this.group.rotation.y += THREE.MathUtils.clamp(dy, -5 * dt, 5 * dt);
+        p.addScaledVector(dir, 0.9 * dt); // slower than a helper's patrol walk
+        this.moving = 0.9;
       }
     }
     this.body.animate(dt, this.moving, 7.4);

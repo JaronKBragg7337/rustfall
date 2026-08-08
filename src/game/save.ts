@@ -15,7 +15,13 @@ import type { Job } from "./entities";
 import type { WeaponId } from "./weapons";
 
 export const SAVE_KEY = "rustfall.save";
-export const SAVE_VERSION = 1;
+/**
+ * v2 adds `cacheIds` (opened outer-ring supply caches) and `goretuskDead`
+ * (the mini-boss stays dead once killed). Both are optional fields, so a v1
+ * blob loads cleanly — the missing fields simply read as "nothing opened,
+ * boss alive". Older-than-1 or newer-than-current blobs are rejected.
+ */
+export const SAVE_VERSION = 2;
 
 export interface SaveData {
   /** Schema version. Anything else is treated as "no usable save". */
@@ -41,6 +47,10 @@ export interface SaveData {
   kills: number;
   /** Indexes into the seeded loot field that were already searched. */
   lootTaken: number[];
+  /** v2: ids of opened outer-ring supply caches. Missing on v1 → none opened. */
+  cacheIds?: string[];
+  /** v2: GORETUSK ALPHA stays dead once killed. Missing on v1 → alive. */
+  goretuskDead?: boolean;
 }
 
 /** Parse and validate. Returns null on anything unexpected — never throws. */
@@ -49,7 +59,8 @@ export function loadSave(): SaveData | null {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw) as SaveData;
-    if (!data || typeof data !== "object" || data.v !== SAVE_VERSION) return null;
+    // v1 saves load as-is: the v2 fields are optional and default to empty.
+    if (!data || typeof data !== "object" || (data.v !== 1 && data.v !== SAVE_VERSION)) return null;
     if (!data.player || !Array.isArray(data.player.pos) || data.player.pos.length !== 3) return null;
     if (typeof data.timeOfDay !== "number" || !Array.isArray(data.inventory)) return null;
     return data;

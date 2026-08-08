@@ -13,7 +13,7 @@
 // generator, the quest deposits and the crafting bench all draw from the same
 // store without knowing how it is laid out.
 
-export type ItemId = "fuel_can" | "scrap" | "pipe_rifle" | "scrap_shotgun";
+export type ItemId = "fuel_can" | "scrap" | "pipe_rifle" | "scrap_shotgun" | "medkit";
 
 export interface ItemDef {
   name: string;
@@ -49,6 +49,12 @@ export const ITEMS: Record<ItemId, ItemDef> = {
     glyph: "💥",
     stack: 1,
     desc: "Six-pellet spread, short range. Tap to equip.",
+  },
+  medkit: {
+    name: "MEDKIT",
+    glyph: "🩹",
+    stack: 3,
+    desc: "Field trauma kit. Use from the backpack: +40 integrity.",
   },
 };
 

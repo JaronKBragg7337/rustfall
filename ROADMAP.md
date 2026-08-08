@@ -81,7 +81,13 @@ Remaining: ~~craftable pipe rifle + scrap shotgun + workbench UI (14)~~ ✅, ~~s
 - **Military checkpoint** ✅ (S, 0,160) — sandbag nests, jersey barriers, watchtower + climb volume, chain perimeter
 - **Junkyard** ✅ (E, 172,−108) — crushed-car stacks, tire-wall maze, gantry crane rails + hoist
 
-## Batch 5 — later
+## Batch 5 — shipped ✅ The next 3 big things
+
+- **Trader & economy** ✅ — SAL the Trader at the railway trading post (barter panel, PC+mobile): sell 10 scrap → 1 fuel, buy medkit 6 / fuel 8 / rifle 60 / shotgun 100. New MEDKIT item (stack ×3, +40 HP from backpack). `src/game/trade.ts`
+- **Outer ring alive** ✅ — boar herds in the ring fields, shambler pack in the suburb, Stalker at the checkpoint, openable loot caches at all 4 outer sites (persist in save v2), mini-boss GORETUSK ALPHA at the plane crash (HP 220, nameplate bar, drops 30 scrap + 2 medkits, stays dead)
+- **Build-mode defenses** ✅ — SCRAP TURRET (30⚙, auto-aims via head pivot, 18 m, eats 1⚙/20 shots), SPIKE TRAP (8⚙, walk-over bleed), FLOODLIGHT POLE (15⚙, lit by the generator, repels waves). All build pieces now cost scrap from the backpack
+
+## Later
 18. Playwright visual harness (doctrine 9.5) + scene-report regression CI
-21. Trader NPC at the trading post (barter UI)
-22. Outer-ring entity spawns (boars/shamblers roam the ring)
+23. Vehicle #3 (motorcycle) + vehicle fuel
+24. Boss #3 in the outer ring

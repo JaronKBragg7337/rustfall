@@ -352,6 +352,35 @@ export class Audio {
     }
   }
 
+  /** Medkit heal — a warm three-note rising chime. */
+  healChime() {
+    this.tone({ freq: 520, dur: 0.14, gain: 0.16, type: "sine" });
+    this.tone({ freq: 660, dur: 0.16, gain: 0.14, type: "sine", delay: 0.09 });
+    this.tone({ freq: 880, dur: 0.26, gain: 0.12, type: "triangle", delay: 0.18 });
+    this.burst({ dur: 0.3, type: "bandpass", freq: 3200, q: 3, gain: 0.05, delay: 0.1 });
+  }
+
+  /** Barter — a coin on the counter: metallic tick, ring, and a soft clank. */
+  tradeCoin() {
+    this.burst({ dur: 0.06, type: "bandpass", freq: 4200, q: 5, gain: 0.22 });
+    this.tone({ freq: 1980, to: 1560, dur: 0.18, gain: 0.12, type: "triangle" });
+    this.tone({ freq: 2640, to: 2100, dur: 0.22, gain: 0.08, type: "sine", delay: 0.05 });
+    this.burst({ dur: 0.09, type: "bandpass", freq: 2400, q: 4, gain: 0.14, delay: 0.12 });
+  }
+
+  /** Scrap turret — a dry servo's crack, lighter than a handheld gun. */
+  turretFire() {
+    this.burst({ dur: 0.1, type: "bandpass", freq: 1500, q: 1.2, gain: 0.2 });
+    this.tone({ freq: 1100, to: 240, dur: 0.1, gain: 0.1, type: "sawtooth" });
+  }
+
+  /** Supply cache lid — a hinge creak and a clunk as it seats open. */
+  cacheLid() {
+    this.tone({ freq: 180, to: 420, dur: 0.3, gain: 0.08, type: "sawtooth" });
+    this.burst({ dur: 0.22, type: "lowpass", freq: 800, q: 1.2, gain: 0.16, delay: 0.05 });
+    this.burst({ dur: 0.1, type: "bandpass", freq: 1600, q: 2.5, gain: 0.2, delay: 0.28 });
+  }
+
   ui() {
     this.tone({ freq: 880, dur: 0.05, gain: 0.07, type: "square" });
   }

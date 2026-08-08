@@ -3,7 +3,7 @@ import * as THREE from "./three";
 import { makeRng, QUALITY, IS_TOUCH, SAFE_ZONE, safeZoneFactor, assetRegistry, qualitySettings, getQualityPreset, storeQualityPreset, type QualityPreset } from "./constants";
 import { loadAtlases } from "./textures";
 import { buildWorld } from "./world";
-import { Robot, Shambler, RunnerShambler, StalkerBot, SporeBoar, Helper, Boss, Buggy, Truck, Vehicle, Mech, type Entity, type Job } from "./entities";
+import { Robot, Shambler, RunnerShambler, StalkerBot, SporeBoar, Helper, Trader, Boss, Buggy, Truck, Vehicle, Mech, type Entity, type Job } from "./entities";
 import { QUESTS, questComplete, type ActiveQuest } from "./quests";
 import { Generator } from "./generator";
 import { Player, FEEL, type MoveInput } from "./player";
@@ -19,6 +19,8 @@ import { Audio } from "./audio";
 import { Particles, DustField } from "./particles";
 import { Inventory, type Slot } from "./inventory";
 import { WEAPONS, RECIPES, makeRifleProp, makeShotgunProp, type WeaponId } from "./weapons";
+import { TRADE_OFFERS, type TradeId } from "./trade";
+import { plain } from "./surface";
 import { SAVE_VERSION, loadSave, writeSave, clearSave, hasSave, type SaveData } from "./save";
 
 export interface HudState {
@@ -77,6 +79,12 @@ export interface HudState {
   inventoryOpen: boolean;
   /** Workbench crafting menu (Batch 2 item 14). */
   craftOpen: boolean;
+  /** SAL's barter panel at the trading post. */
+  tradeOpen: boolean;
+  /** GORETUSK ALPHA health while engaged — drives the nameplate bar. */
+  goretusk: { hp: number; max: number } | null;
+  /** Contextual hint while standing near a scrap-starved turret. */
+  turretHint: string | null;
   /** Equipped weapon, for the HUD badge. */
   weapon: { id: WeaponId; name: string; glyph: string };
   /** True once any craftable gun is owned — shows the mobile WPN button. */
@@ -87,6 +95,56 @@ export interface HudState {
 
 interface Ring { obj: THREE.Mesh; t: number; }
 interface Pop { obj: THREE.Object3D; t: number; }
+
+/** A sealed outer-ring supply cache: opened once, persists in the save. */
+interface CacheState {
+  id: string;
+  obj: THREE.Object3D | null; // the registered asset, when the world shipped one
+  pos: THREE.Vector3;
+  opened: boolean;
+  marker: THREE.Group;
+  scrap: number;
+  phase: number;
+}
+
+/** A player-placed scrap turret (build mode, role "scrap_turret"). */
+interface TurretState {
+  obj: THREE.Object3D;
+  /** The yaw-able head group (userData.turretHead); falls back to obj if absent. */
+  head: THREE.Object3D;
+  cooldown: number;
+  shots: number;
+  /** True once it tried to burn scrap it didn't have — drives the HUD hint. */
+  hungry: boolean;
+}
+
+/** A player-placed spike trap (build mode, role "spike_trap"). */
+interface SpikeState {
+  obj: THREE.Object3D;
+  pos: THREE.Vector3;
+  /** Per-target re-trigger cooldown, so a pack crossing gets bled one by one. */
+  cooldowns: Map<Entity, number>;
+}
+
+/**
+ * Cyan shard + halo above an unopened supply cache — the same "interactive"
+ * vocabulary as the amber loot diamond, in a colour that reads "sealed supply"
+ * rather than "searchable wreckage".
+ */
+function makeCacheMarker(): THREE.Group {
+  const g = new THREE.Group();
+  const core = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.16, 0),
+    plain(0x9fe8ff, 0.35, 0.2, { emissive: 0x55b6ff, emissiveIntensity: 2.4 })
+  );
+  const halo = new THREE.Mesh(
+    new THREE.RingGeometry(0.28, 0.36, 16),
+    new THREE.MeshBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false })
+  );
+  halo.rotation.x = -Math.PI / 2;
+  g.add(core, halo);
+  return g;
+}
 
 export class Game {
   private renderer!: THREE.WebGLRenderer;
@@ -161,6 +219,16 @@ export class Game {
   private weaponProp: THREE.Group | null = null;
   private inventoryOpen = false;
   private craftOpen = false;
+  // ── Trader & barter (trading post) ──
+  private trader!: Trader;
+  private tradeOpen = false;
+  // ── Outer ring: mini-boss, sealed caches, player-built defenses ──
+  private goretusk: SporeBoar | null = null;
+  private caches: CacheState[] = [];
+  private turrets: TurretState[] = [];
+  private spikes: SpikeState[] = [];
+  private defenseScanT = 0;
+  private turretHint: string | null = null;
   // ── Save/load (item 16) ──
   /** Wall of the run: autosaves only tick while a run is actually in play. */
   private runStarted = false;
@@ -269,7 +337,7 @@ export class Game {
       const z = Math.sin(a) * r;
       return new THREE.Vector3(x, heightAt(x, z), z);
     };
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < (QUALITY.mobile ? 3 : 4); i++) {
       const r = new Robot(spawn(18, 70), true); // mean ones roam deep
       r.onFire = (from, to) => {
         // Cover has to actually work. Without this the bolt ignored geometry and
@@ -303,41 +371,54 @@ export class Game {
       }
     }
     // Stalkers: long-range snipers working the open ground. Capped at 1–2.
-    for (let i = 0; i < (QUALITY.mobile ? 1 : 2); i++) {
-      const s = new StalkerBot(spawn(45, 80), 6100 + i * 97);
-      s.onCharge = () => this.audio.laserCharge();
-      s.onFire = (from, to) => {
-        // same cover contract as every other shot: walls stop bolts
-        const clear = this.lineOfSight(from, to);
-        const dir = new THREE.Vector3().subVectors(to, from).normalize();
-        this.spawnTracer(from, clear.point, clear.hit ? 0x885544 : 0xff2222);
-        this.audio.laserDischarge();
-        this.fx.muzzleFlash(from, dir);
-        if (clear.hit) { this.audio.shotBlocked(); this.fx.impact(clear.point, dir.clone().negate()); }
-        else { this.damagePlayer(28); this.audio.hurt(); }
-      };
-      this.entities.push(s);
-      this.scene.add(s.group);
+    // Mobile retires the inner patrol entirely: the outer-ring checkpoint
+    // stalker below REPLACES it, so the device-tier budget stays flat while
+    // the outer ring comes alive.
+    for (let i = 0; i < (QUALITY.mobile ? 0 : 2); i++) {
+      this.wireStalker(new StalkerBot(spawn(45, 80), 6100 + i * 97));
     }
+    // Outer ring (2c): one stalker holds the military checkpoint at (0, 160).
+    this.wireStalker(new StalkerBot(new THREE.Vector3(0, heightAt(0, 160), 160), 6300));
     // Feral spore-boars (item 15): 2–3 roaming the fields, none in the sanctuary.
-    for (let i = 0; i < (QUALITY.mobile ? 2 : 3); i++) {
+    // Mobile trims the INNER ring first to make budget room for the outer herds.
+    for (let i = 0; i < (QUALITY.mobile ? 1 : 3); i++) {
       let pos = spawn(30, 80);
       for (let tries = 0; tries < 12 && safeZoneFactor(pos.x, pos.z) > 0; tries++) pos = spawn(30, 80);
-      const b = new SporeBoar(pos, 3300 + i * 71);
-      b.onSnort = () => this.audio.boarSnort();
-      b.onHit = (dir) => {
-        // tusk hit: damage plus a real knockdown — the player is thrown
-        this.damagePlayer(16);
-        this.player.velocity.x += dir.x * 9;
-        this.player.velocity.z += dir.z * 9;
-        if (this.player.velocity.y < 3.2) this.player.velocity.y = 3.2;
-        this.player.grounded = false;
-        this.audio.boarImpact();
-        this.audio.hurt();
-        this.fx.impact(this.player.position.clone().add(new THREE.Vector3(0, 1, 0)), dir.clone().negate());
-      };
-      this.entities.push(b);
-      this.scene.add(b.group);
+      this.addBoar(pos, 3300 + i * 71);
+    }
+    // ── Outer ring alive (2a): seeded boar herds out past the 105 m line ──
+    {
+      const herdRng = makeRng(8801);
+      const herds = QUALITY.mobile ? 2 : 3;
+      const perHerd = QUALITY.mobile ? 2 : 3;
+      for (let h = 0; h < herds; h++) {
+        let hx = 0, hz = 0;
+        for (let t = 0; t < 12; t++) {
+          hx = (herdRng() * 2 - 1) * 170;
+          hz = (herdRng() * 2 - 1) * 170;
+          if (Math.abs(hx) > 105 || Math.abs(hz) > 105) break;
+        }
+        for (let j = 0; j < perHerd; j++) {
+          const x = hx + (herdRng() - 0.5) * 14;
+          const z = hz + (herdRng() - 0.5) * 14;
+          this.addBoar(new THREE.Vector3(x, heightAt(x, z), z), 9100 + h * 37 + j);
+        }
+      }
+    }
+    // ── Outer ring alive (2b): a pack infests the ruined suburb at (-150, 120) ──
+    {
+      const packRng = makeRng(7702);
+      const pack = QUALITY.mobile ? 3 : 5;
+      const runners = QUALITY.mobile ? 1 : 2;
+      for (let i = 0; i < pack; i++) {
+        const x = -150 + (packRng() - 0.5) * 28;
+        const z = 120 + (packRng() - 0.5) * 28;
+        const pos = new THREE.Vector3(x, heightAt(x, z), z);
+        const zed = i < runners ? new RunnerShambler(pos, 500 + i) : new Shambler(pos);
+        if (zed instanceof RunnerShambler) zed.onAggro = () => this.audio.runnerScreech();
+        this.entities.push(zed);
+        this.scene.add(zed.group);
+      }
     }
     const bx = -6, bz = -44;
     this.helpers.push(
@@ -354,6 +435,71 @@ export class Game {
     };
     this.scene.add(this.boss.group);
     this.entities.push(this.boss);
+    // ── GORETUSK ALPHA (2e): mini-boss at the crashed-plane arena ──
+    // The arena marker is registered by the world build; without it the fight
+    // still happens at the contract fallback point.
+    {
+      const marker = assetRegistry.find((r) => r.role === "boss_arena_goretusk");
+      const pos = new THREE.Vector3(-140, 0, -150);
+      if (marker) marker.object.getWorldPosition(pos);
+      pos.y = heightAt(pos.x, pos.z);
+      const g = new SporeBoar(pos, 7777, {
+        scale: 1.6, hp: 220, chargeSpeed: 14, aggroRange: 16, role: "BOSS: GORETUSK ALPHA",
+      });
+      g.onSnort = () => this.audio.boarSnort();
+      g.onHit = (dir) => {
+        // tusk hit like any boar, plus the spore crop bursts on the gore
+        this.damagePlayer(16);
+        this.player.velocity.x += dir.x * 10;
+        this.player.velocity.z += dir.z * 10;
+        if (this.player.velocity.y < 3.6) this.player.velocity.y = 3.6;
+        this.player.grounded = false;
+        this.audio.boarImpact();
+        this.audio.hurt();
+        const at = this.player.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+        this.fx.emit(at, { count: 30, speed: 3.2, life: 1.3, size: 0.5, color: 0x7a9a3a, gravity: -0.4, drag: 1.7 });
+        this.fx.impact(at, dir.clone().negate());
+      };
+      this.entities.push(g);
+      this.scene.add(g.group);
+      this.goretusk = g;
+    }
+    // ── SAL the Trader (1): holds the trading-post stall at (-31, 77.3) ──
+    // He never leaves the counter — two stations inside the stall footprint.
+    this.trader = new Trader(
+      new THREE.Vector3(-31, 0, 78.4),
+      [new THREE.Vector3(-31, 0, 78.4), new THREE.Vector3(-29.9, 0, 78.1)],
+      "SAL"
+    );
+    this.scene.add(this.trader.group);
+    // ── Sealed supply caches (2d): outer-ring, one-time, persisted ──
+    // Registered "loot_cache" assets are the interact points; with none
+    // registered, three seeded fallback sites keep the mechanic alive.
+    {
+      const cacheRng = makeRng(6600);
+      const defs: Array<{ id: string; obj: THREE.Object3D | null; pos: THREE.Vector3 }> = [];
+      for (const rec of assetRegistry) {
+        if (rec.role !== "loot_cache") continue;
+        const wp = new THREE.Vector3();
+        rec.object.getWorldPosition(wp);
+        defs.push({ id: rec.id, obj: rec.object, pos: wp });
+      }
+      if (defs.length === 0) {
+        const spots: Array<[number, number]> = [[-128, 58], [96, -132], [142, 96]];
+        spots.forEach(([x, z], i) => {
+          defs.push({ id: `CACHE-FALLBACK-${i}`, obj: null, pos: new THREE.Vector3(x, heightAt(x, z), z) });
+        });
+      }
+      for (const d of defs) {
+        const marker = makeCacheMarker();
+        marker.position.set(d.pos.x, d.pos.y + 1.3, d.pos.z);
+        this.scene.add(marker);
+        this.caches.push({
+          id: d.id, obj: d.obj, pos: d.pos, opened: false, marker,
+          scrap: 5 + Math.floor(cacheRng() * 6), phase: cacheRng() * 6.28,
+        });
+      }
+    }
     this.vehicles.push(new Buggy(new THREE.Vector3(16, heightAt(16, -36), -36)));
     this.vehicles.push(new Truck(new THREE.Vector3(-18, heightAt(-18, -52), -52)));
     for (const v of this.vehicles) this.scene.add(v.group);
@@ -398,7 +544,7 @@ export class Game {
     if (e.repeat) return;
     this.audio.resume();
     // Panels own Escape/Tab while open — one owner per key, per state.
-    if (e.code === "Escape" && (this.inventoryOpen || this.craftOpen)) {
+    if (e.code === "Escape" && (this.inventoryOpen || this.craftOpen || this.tradeOpen)) {
       this.closePanels();
       return;
     }
@@ -429,7 +575,7 @@ export class Game {
   };
   /** Scroll wheel cycles OWNED weapons while on foot — never in build mode. */
   private onWheel = (e: WheelEvent) => {
-    if (this.buildMode.active || this.inventoryOpen || this.craftOpen || this.cinema.active) return;
+    if (this.buildMode.active || this.inventoryOpen || this.craftOpen || this.tradeOpen || this.cinema.active) return;
     if (this.mode !== "FOOT") return;
     this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
   };
@@ -447,7 +593,7 @@ export class Game {
     if (e.button !== 0) return;
     // While a panel is open its buttons own the clicks — re-locking the pointer
     // here would swallow the click that was meant for a backpack slot.
-    if (this.inventoryOpen || this.craftOpen) return;
+    if (this.inventoryOpen || this.craftOpen || this.tradeOpen) return;
     if (!IS_TOUCH && document.pointerLockElement !== this.canvas) {
       this.canvas.requestPointerLock();
       return;
@@ -466,10 +612,18 @@ export class Game {
 
   /** Left click / fire button: place a piece in build mode, otherwise shoot. */
   private primary() {
-    if (this.inventoryOpen || this.craftOpen) return; // panels own the clicks while open
+    if (this.inventoryOpen || this.craftOpen || this.tradeOpen) return; // panels own the clicks while open
     if (this.buildMode.active) {
+      // every piece costs scrap from the backpack (catalog: build.ts PIECES)
+      const piece = this.buildMode.piece;
+      const cost = piece.cost ?? 0;
+      if (cost > 0) {
+        const have = this.player.inventory.count("scrap");
+        if (have < cost) { this.say(`NEED ${cost} SCRAP · HAVE ${have}`); this.audio.ui(); return; }
+      }
       const res = this.buildMode.place();
       if (res) {
+        if (cost > 0) this.player.inventory.remove("scrap", cost);
         this.spawnRing(res.position, res.snapped ? 0x33ddff : 0x44ff88); // THE snap effect
         this.audio.build();
         this.pops.push({ obj: res.object, t: 0.16 });
@@ -540,6 +694,260 @@ export class Game {
 
   pressInteract() { this.interact(); }
 
+  // ── Spawn wiring: one place per creature type, shared by every ring ──
+
+  /** Tusk-hit contract for every spore-boar: damage plus a real knockdown. */
+  private addBoar(pos: THREE.Vector3, seed: number) {
+    const b = new SporeBoar(pos, seed);
+    b.onSnort = () => this.audio.boarSnort();
+    b.onHit = (dir) => {
+      this.damagePlayer(16);
+      this.player.velocity.x += dir.x * 9;
+      this.player.velocity.z += dir.z * 9;
+      if (this.player.velocity.y < 3.2) this.player.velocity.y = 3.2;
+      this.player.grounded = false;
+      this.audio.boarImpact();
+      this.audio.hurt();
+      this.fx.impact(this.player.position.clone().add(new THREE.Vector3(0, 1, 0)), dir.clone().negate());
+    };
+    this.entities.push(b);
+    this.scene.add(b.group);
+  }
+
+  /** Sniper contract: walls stop bolts, same as every other shot in the game. */
+  private wireStalker(s: StalkerBot) {
+    s.onCharge = () => this.audio.laserCharge();
+    s.onFire = (from, to) => {
+      const clear = this.lineOfSight(from, to);
+      const dir = new THREE.Vector3().subVectors(to, from).normalize();
+      this.spawnTracer(from, clear.point, clear.hit ? 0x885544 : 0xff2222);
+      this.audio.laserDischarge();
+      this.fx.muzzleFlash(from, dir);
+      if (clear.hit) { this.audio.shotBlocked(); this.fx.impact(clear.point, dir.clone().negate()); }
+      else { this.damagePlayer(28); this.audio.hurt(); }
+    };
+    this.entities.push(s);
+    this.scene.add(s.group);
+  }
+
+  // ── Sealed supply caches (outer ring) ──
+
+  private nearestCache(p: THREE.Vector3, r = 3.2): CacheState | null {
+    let best: CacheState | null = null;
+    let bd = r;
+    for (const c of this.caches) {
+      if (c.opened) continue;
+      if (Math.abs(c.pos.y - p.y) > 3) continue;
+      const d = Math.hypot(c.pos.x - p.x, c.pos.z - p.z);
+      if (d < bd) { bd = d; best = c; }
+    }
+    return best;
+  }
+
+  private openCache(c: CacheState) {
+    const inv = this.player.inventory;
+    if (inv.spaceFor("fuel_can") < 1 && inv.spaceFor("scrap") < 1) {
+      this.say("BACKPACK FULL — NO ROOM FOR THE CACHE");
+      this.audio.ui();
+      return;
+    }
+    c.opened = true;
+    this.scene.remove(c.marker);
+    if (c.obj) {
+      // the lid pops: a small tilt plus the placement-pop bounce, so an opened
+      // cache reads as opened from across the field
+      c.obj.rotation.x -= 0.12;
+      this.pops.push({ obj: c.obj, t: 0.16 });
+    }
+    const fuel = inv.add("fuel_can", 1);
+    const scrap = inv.add("scrap", c.scrap);
+    this.audio.cacheLid();
+    this.audio.pickup();
+    this.fx.salvageBurst(c.pos.clone().add(new THREE.Vector3(0, 1, 0)));
+    this.spawnRing(c.pos.clone(), 0x9fe8ff);
+    this.say(`CACHE OPENED · +${fuel} FUEL CAN · +${scrap} SCRAP`, 3);
+  }
+
+  // ── SAL's barter counter ──
+
+  private nearTrader(p: THREE.Vector3, r = 3.2): boolean {
+    return Math.hypot(this.trader.group.position.x - p.x, this.trader.group.position.z - p.z) < r;
+  }
+
+  private openTrade() {
+    this.tradeOpen = true;
+    this.inventoryOpen = false;
+    this.craftOpen = false;
+    this.audio.panel(true);
+    if (!IS_TOUCH) document.exitPointerLock?.();
+  }
+
+  /** One barter transaction. Scrap is the only currency SAL accepts. */
+  trade(id: TradeId) {
+    const offer = TRADE_OFFERS.find((o) => o.id === id);
+    if (!offer) return;
+    const inv = this.player.inventory;
+    const fail = (msg: string) => { this.say(msg); this.audio.ui(); };
+    switch (id) {
+      case "sell_scrap": {
+        if (inv.count("scrap") < 10) return fail("SAL BUYS IN TENS — NOT ENOUGH SCRAP");
+        if (inv.spaceFor("fuel_can") < 1) return fail("NO ROOM FOR THE FUEL CAN");
+        inv.remove("scrap", 10);
+        inv.add("fuel_can", 1);
+        this.say("SOLD 10 SCRAP · +1 FUEL CAN");
+        break;
+      }
+      case "buy_medkit": {
+        if (inv.count("scrap") < offer.cost) return fail(`NEED ${offer.cost} SCRAP`);
+        if (inv.spaceFor("medkit") < 1) return fail("BACKPACK FULL — NO ROOM FOR THE MEDKIT");
+        inv.remove("scrap", offer.cost);
+        inv.add("medkit", 1);
+        this.say("BOUGHT MEDKIT 🩹");
+        break;
+      }
+      case "buy_fuel": {
+        if (inv.count("scrap") < offer.cost) return fail(`NEED ${offer.cost} SCRAP`);
+        if (inv.spaceFor("fuel_can") < 1) return fail("BACKPACK FULL — NO ROOM FOR THE CAN");
+        inv.remove("scrap", offer.cost);
+        inv.add("fuel_can", 1);
+        this.say("BOUGHT FUEL CAN ⛽");
+        break;
+      }
+      case "buy_rifle":
+      case "buy_shotgun": {
+        const item = id === "buy_rifle" ? "pipe_rifle" as const : "scrap_shotgun" as const;
+        if (inv.has(item)) return fail("ALREADY IN YOUR PACK");
+        if (inv.count("scrap") < offer.cost) return fail(`NEED ${offer.cost} SCRAP`);
+        if (inv.spaceFor(item) < 1) return fail("BACKPACK FULL — MAKE ROOM FIRST");
+        inv.remove("scrap", offer.cost);
+        inv.add(item, 1);
+        this.say(`BOUGHT ${WEAPONS[item].name}`);
+        this.selectWeapon(item); // straight into the hands, like a fresh craft
+        break;
+      }
+    }
+    this.audio.tradeCoin();
+  }
+
+  // ── Player-built defenses (build mode roles) ──
+
+  /** Adopt newly placed turrets and spike traps from the asset registry. */
+  private scanDefenses() {
+    for (const rec of assetRegistry) {
+      if (rec.role === "scrap_turret" && !this.turrets.some((t) => t.obj === rec.object)) {
+        // The build piece tags its aimable head group; yaw THAT, not the tripod.
+        let head: THREE.Object3D = rec.object;
+        rec.object.traverse((c) => { if (c.userData.turretHead) head = c; });
+        this.turrets.push({ obj: rec.object, head, cooldown: 0.4, shots: 0, hungry: false });
+      } else if (rec.role === "spike_trap" && !this.spikes.some((s) => s.obj === rec.object)) {
+        const wp = new THREE.Vector3();
+        rec.object.getWorldPosition(wp);
+        this.spikes.push({ obj: rec.object, pos: wp, cooldowns: new Map() });
+      }
+    }
+  }
+
+  private updateDefenses(dt: number) {
+    // scrap turrets: track the nearest hostile in range and crack away
+    for (const t of this.turrets) {
+      t.cooldown -= dt;
+      const from = new THREE.Vector3();
+      t.obj.getWorldPosition(from);
+      let best: Entity | null = null;
+      let bd = 18;
+      for (const e of this.entities) {
+        if (e.dead || !e.hostile) continue;
+        const d = Math.hypot(e.group.position.x - from.x, e.group.position.z - from.z);
+        if (d < bd) { bd = d; best = e; }
+      }
+      if (!best) continue;
+      // the head slews toward the target even between shots — head yaw is local
+      // to the (possibly R-rotated) root, so subtract the root's yaw
+      const targetYaw = Math.atan2(best.group.position.x - from.x, best.group.position.z - from.z) - t.obj.rotation.y;
+      let dy = targetYaw - t.head.rotation.y;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      t.head.rotation.y += THREE.MathUtils.clamp(dy, -3.5 * dt, 3.5 * dt);
+      if (t.cooldown > 0) continue;
+      // upkeep: one scrap from the backpack per 20 shots; dry turrets hold fire
+      if (t.shots > 0 && t.shots % 20 === 0) {
+        if (this.player.inventory.count("scrap") < 1) { t.hungry = true; continue; }
+        this.player.inventory.remove("scrap", 1);
+        t.hungry = false;
+      }
+      t.cooldown = 1.6;
+      t.shots += 1;
+      // muzzle: root world position is the firing origin (rootLift 1.2 m),
+      // pushed slightly along the head's facing
+      const worldYaw = t.obj.rotation.y + t.head.rotation.y;
+      const facing = new THREE.Vector3(Math.sin(worldYaw), 0, Math.cos(worldYaw));
+      const muzzle = from.clone().addScaledVector(facing, 0.7);
+      const aim = best.group.position.clone().add(new THREE.Vector3(0, 0.9, 0));
+      const clear = this.lineOfSight(muzzle, aim); // walls stop turret bolts too
+      this.spawnTracer(muzzle, clear.point, 0xffd27a);
+      this.audio.turretFire();
+      this.fx.muzzleFlash(muzzle, new THREE.Vector3().subVectors(aim, muzzle).normalize());
+      if (!clear.hit) {
+        best.damage(6);
+        if (best.dead) this.onHostileKilled(best);
+      }
+    }
+    // spike traps: bleed anything hostile that steps on them, 1 s per target
+    for (const s of this.spikes) {
+      for (const [e, cd] of s.cooldowns) {
+        const n = cd - dt;
+        if (n <= 0) s.cooldowns.delete(e); else s.cooldowns.set(e, n);
+      }
+      for (const e of this.entities) {
+        if (e.dead || !e.hostile || s.cooldowns.has(e)) continue;
+        const d = Math.hypot(e.group.position.x - s.pos.x, e.group.position.z - s.pos.z);
+        if (d > 1.2 || Math.abs(e.group.position.y - s.pos.y) > 2) continue;
+        s.cooldowns.set(e, 1.0);
+        e.damage(15);
+        const at = e.group.position.clone().add(new THREE.Vector3(0, 0.4, 0));
+        this.fx.emit(at, { count: 8, speed: 2.2, life: 0.5, size: 0.14, color: 0x7a1a12, gravity: -9, drag: 1.6 });
+        this.fx.emit(at, { count: 5, speed: 1.2, life: 0.6, size: 0.3, color: 0x6b5a44, gravity: -1.2, drag: 2.2 });
+        if (e.dead) this.onHostileKilled(e);
+      }
+    }
+    // contextual HUD hint near a scrap-starved turret
+    let hint: string | null = null;
+    for (const t of this.turrets) {
+      if (!t.hungry) continue;
+      const wp = new THREE.Vector3();
+      t.obj.getWorldPosition(wp);
+      if (Math.hypot(wp.x - this.player.position.x, wp.z - this.player.position.z) < 8) {
+        hint = "TURRET OUT OF SCRAP — IT EATS ⚙1 PER 20 SHOTS";
+        break;
+      }
+    }
+    this.turretHint = hint;
+  }
+
+  /** One funnel for hostile deaths: score, quest credit, salvage, gore. */
+  private onHostileKilled(e: Entity) {
+    this.kills += 1;
+    // Guard's Night Watch errand counts shambler kills made after dark —
+    // wave-night kills qualify, which is rather the point of the job.
+    if (this.quest && this.quest.def.kind === "cull" && !questComplete(this.quest) &&
+        this.sky.nightness > 0.4 &&
+        (e instanceof Shambler || e instanceof RunnerShambler)) {
+      this.quest.progress += 1;
+      if (questComplete(this.quest)) this.say(`NIGHT WATCH DONE — REPORT TO ${this.quest.giverName}`);
+    }
+    if (e === this.goretusk) {
+      // the mini-boss pays out properly: a heavy drop plus two medkits
+      this.loot.addDrop(e.group.position, 30);
+      const got = this.player.inventory.add("medkit", 2);
+      this.say(got === 2 ? "GORETUSK DOWN · +30 SCRAP DROP · +2 MEDKITS" : "GORETUSK DOWN · +30 SCRAP DROP", 3.5);
+    } else {
+      // A kill should leave something behind, or fighting is pure cost.
+      this.loot.addDrop(e.group.position, 5 + Math.floor(Math.random() * 9));
+    }
+    this.audio.robotDeath();
+    this.fx.wreck(e.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)));
+  }
+
   // ── Backpack, weapons & workbench (Batch 2 items 14 + inventory) ──
 
   /**
@@ -567,6 +975,7 @@ export class Game {
   /** Backpack panel toggle (Tab / I on PC, 🎒 button on touch). */
   toggleInventory() {
     if (this.craftOpen) this.craftOpen = false; // one panel at a time
+    if (this.tradeOpen) this.tradeOpen = false;
     this.inventoryOpen = !this.inventoryOpen;
     this.audio.panel(this.inventoryOpen);
     // The cursor must be free to click slots; re-lock happens on the next
@@ -575,14 +984,16 @@ export class Game {
   }
 
   closePanels() {
-    if (this.inventoryOpen || this.craftOpen) this.audio.panel(false);
+    if (this.inventoryOpen || this.craftOpen || this.tradeOpen) this.audio.panel(false);
     this.inventoryOpen = false;
     this.craftOpen = false;
+    this.tradeOpen = false;
   }
 
   private openCraft() {
     this.craftOpen = true;
     this.inventoryOpen = false;
+    this.tradeOpen = false;
     this.audio.panel(true);
     if (!IS_TOUCH) document.exitPointerLock?.();
   }
@@ -606,6 +1017,17 @@ export class Game {
       case "pipe_rifle":
       case "scrap_shotgun":
         this.selectWeapon(slot.id);
+        break;
+      case "medkit":
+        if (this.player.hp >= this.player.maxHp) {
+          this.say("INTEGRITY ALREADY FULL");
+          this.audio.ui();
+        } else {
+          this.player.inventory.remove("medkit", 1);
+          this.player.hp = Math.min(this.player.maxHp, this.player.hp + 40);
+          this.audio.healChime();
+          this.say("MEDKIT USED · +40 INTEGRITY");
+        }
         break;
       case "scrap":
         this.say("RAW MATERIAL — CRAFT IT AT THE WORKBENCH");
@@ -746,6 +1168,8 @@ export class Game {
       nightIndex: this.nightIndex,
       kills: this.kills,
       lootTaken,
+      cacheIds: this.caches.filter((c) => c.opened).map((c) => c.id),
+      goretuskDead: this.goretusk ? this.goretusk.dead : false,
     };
   }
 
@@ -785,6 +1209,24 @@ export class Game {
         const n = this.loot.nodes[i];
         if (n && !n.taken) this.loot.take(n);
       }
+    }
+    // Opened supply caches stay opened (v2; the field is absent on v1 saves,
+    // which simply means nothing has been opened yet).
+    if (Array.isArray(d.cacheIds)) {
+      for (const id of d.cacheIds) {
+        const c = this.caches.find((x) => x.id === id);
+        if (c && !c.opened) {
+          c.opened = true;
+          this.scene.remove(c.marker);
+        }
+      }
+    }
+    // GORETUSK ALPHA does not respawn once killed (v2; absent → alive).
+    if (d.goretuskDead && this.goretusk && !this.goretusk.dead) {
+      this.goretusk.dead = true;
+      this.goretusk.hp = 0;
+      this.scene.remove(this.goretusk.group);
+      this.entities = this.entities.filter((e) => e !== this.goretusk);
     }
   }
 
@@ -831,7 +1273,7 @@ export class Game {
   // ── Interactions: board a vehicle (driver seat), climb into the mech ──
   private interact() {
     const p = this.player.position;
-    if (this.craftOpen || this.inventoryOpen) { this.closePanels(); return; } // E also closes panels
+    if (this.craftOpen || this.inventoryOpen || this.tradeOpen) { this.closePanels(); return; } // E also closes panels
     if (this.mode === "FOOT") {
       const inv = this.player.inventory;
       const node = this.loot.nearest(p);
@@ -866,6 +1308,18 @@ export class Game {
         } else {
           this.say("GENERATOR IS DRY — FIND FUEL CANS");
         }
+        return;
+      }
+      // SAL the Trader: E opens the barter panel. Checked before the helpers —
+      // he keeps shop far from the base, but the contract is identical.
+      if (this.nearTrader(p)) {
+        this.openTrade();
+        return;
+      }
+      // Sealed supply caches: one-time outer-ring reward, persisted in the save.
+      const cache = this.nearestCache(p);
+      if (cache) {
+        this.openCache(cache);
         return;
       }
       // Fetch quests (item 11): talk to a base NPC, same E-interaction contract.
@@ -1156,21 +1610,7 @@ export class Game {
       if (best) {
         this.fx.impact(end, dir.clone().negate());
         best.e.damage(dmg);
-        if (best.e.dead) {
-          this.kills += 1;
-          // Guard's Night Watch errand counts shambler kills made after dark —
-          // wave-night kills qualify, which is rather the point of the job.
-          if (this.quest && this.quest.def.kind === "cull" && !questComplete(this.quest) &&
-              this.sky.nightness > 0.4 &&
-              (best.e instanceof Shambler || best.e instanceof RunnerShambler)) {
-            this.quest.progress += 1;
-            if (questComplete(this.quest)) this.say(`NIGHT WATCH DONE — REPORT TO ${this.quest.giverName}`);
-          }
-          // A kill should leave something behind, or fighting is pure cost.
-          this.loot.addDrop(best.e.group.position, 5 + Math.floor(Math.random() * 9));
-          this.audio.robotDeath();
-          this.fx.wreck(best.e.group.position.clone().add(new THREE.Vector3(0, 0.9, 0)));
-        }
+        if (best.e.dead) this.onHostileKilled(best.e);
       }
     }
   }
@@ -1265,7 +1705,23 @@ export class Game {
       }
     }
     for (const h of this.helpers) h.update(dt);
+    this.trader.update(dt);
     this.loot.update(dt, pp);
+    // unopened caches keep their shard breathing
+    for (const c of this.caches) {
+      if (c.opened) continue;
+      c.phase += dt * 2.2;
+      c.marker.position.y = c.pos.y + 1.3 + Math.sin(c.phase) * 0.11;
+      c.marker.rotation.y += dt * 0.9;
+    }
+    // player-built defenses: adopt new placements twice a second, run every frame
+    this.defenseScanT -= dt;
+    if (this.defenseScanT <= 0) {
+      this.defenseScanT = 0.5;
+      this.scanDefenses();
+      this.generator.syncExternalPoles();
+    }
+    this.updateDefenses(dt);
     // The generator burns, lights at dusk, and chugs only within earshot.
     this.generator.update(dt, this.sky.nightness);
     {
@@ -1448,6 +1904,8 @@ export class Game {
             }
             const nh = this.nearestHelper(pp);
             if (nh) return this.questPrompt(nh);
+            if (this.nearTrader(pp)) return "TRADE WITH SAL 💰";
+            if (this.nearestCache(pp)) return "OPEN SUPPLY CACHE 💠";
             if (this.nearWorkbench(pp)) return "OPEN WORKBENCH 🔨";
             return nearestV ? `BOARD ${nearestV.name}` : nearMech ? "PILOT MECH" : null;
           })(),
@@ -1497,6 +1955,12 @@ export class Game {
       inventory: this.player.inventory.toJSON(),
       inventoryOpen: this.inventoryOpen,
       craftOpen: this.craftOpen,
+      tradeOpen: this.tradeOpen,
+      goretusk: this.goretusk && !this.goretusk.dead &&
+        (this.goretusk.hp < this.goretusk.maxHp || this.goretusk.group.position.distanceTo(pp) < 30)
+        ? { hp: Math.round(this.goretusk.hp), max: this.goretusk.maxHp }
+        : null,
+      turretHint: this.turretHint,
       weapon: {
         id: this.currentWeapon,
         name: WEAPONS[this.currentWeapon].name,

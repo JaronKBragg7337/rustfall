@@ -1167,6 +1167,178 @@ function buildJunkyard(refs: WorldRefs, rng: () => number) {
   }
 }
 
+// ═══════════════════════════ 5 · SEALED LOOT CACHES ═══════════════════════════
+// One sturdy supply cache at each outer site. Cross-agent contract: every cache
+// registers role "loot_cache" on its ROOT, and the root position IS the
+// interact point — the behaviour agent looks these up in the asset registry.
+// 0.9 x 0.6 x 0.5 m: painted IND02 lid, rusted MET01 bands, instanced rivets,
+// hinge + latch hardware. Own RNG stream (55123) — every existing draw is
+// untouched. Grounded through heightAt (the plane cache beds on the fuselage
+// cargo floor — see below).
+
+/** The sealed supply cache — same assembly at all four sites. */
+function makeCache(): THREE.Group {
+  const body = matOf("MET01", 1.5);  // rusted plate box
+  const lid = matOf("IND02", 1);     // painted metal lid
+  const dk = dark();
+  const st = steel();
+  const g = new THREE.Group();
+
+  // ── primary: skids, box, overhanging lid ──
+  for (const sz of [-0.18, 0.18]) g.add(part(flatBox(0.86, 0.05, 0.08), dk, { pos: [0, 0.025, sz] }));
+  g.add(bev(0.9, 0.46, 0.5, body, { pos: [0, 0.28, 0], radius: 0.015 }));
+  g.add(bev(0.94, 0.09, 0.54, lid, { pos: [0, 0.545, 0], radius: 0.02 }));
+
+  // ── secondary: bands, hinge, latch ──
+  for (const sx of [-0.26, 0.26]) {
+    g.add(part(flatBox(0.07, 0.5, 0.52), body, { pos: [sx, 0.3, 0] }));        // girth straps
+    g.add(part(flatBox(0.07, 0.02, 0.56), dk, { pos: [sx, 0.585, 0] }));       // strap over the lid
+  }
+  for (const hx of [-0.22, 0.22]) g.add(hinge(0.14, dk, st, { pos: [hx, 0.5, -0.27], rot: [0, 0, Math.PI / 2] }));
+  // latch on the front face: hasp plate, staple, pull handle
+  g.add(part(flatBox(0.09, 0.14, 0.02), dk, { pos: [0, 0.44, 0.26] }));
+  g.add(part(cyl(0.018, 0.018, 0.1, 6), st, { pos: [0, 0.53, 0.28], rot: [0, 0, Math.PI / 2] }));
+  g.add(part(new THREE.TorusGeometry(0.045, 0.012, 6, 12, Math.PI), st, { pos: [0, 0.46, 0.28], rot: [Math.PI / 2, 0, Math.PI] }));
+
+  // ── tertiary: instanced rivets — lid rim + strap lines ──
+  const rv: Placement[] = [];
+  for (const rx of [-0.38, -0.13, 0.13, 0.38]) {
+    rv.push({ pos: [rx, 0.545, 0.272], rot: [Math.PI / 2, 0, 0] });
+    rv.push({ pos: [rx, 0.545, -0.272], rot: [-Math.PI / 2, 0, 0] });
+  }
+  for (const sx of [-0.26, 0.26]) for (const ry of [0.12, 0.3, 0.48]) {
+    rv.push({ pos: [sx, ry, 0.265], rot: [Math.PI / 2, 0, 0] });
+    rv.push({ pos: [sx, ry, -0.265], rot: [-Math.PI / 2, 0, 0] });
+  }
+  g.add(rivets(rv, st));
+  return g;
+}
+
+function buildLootCaches(refs: WorldRefs, rng: () => number) {
+  const { unit } = makeOuterBuilder(refs);
+
+  // 1 · CRASH SITE — inside the walkable fuselage, aft bay on the cargo floor.
+  // Rebuild the fuselage transform (same numbers as buildCrashSite) and solve
+  // the cache's footing through it: the floor rides ~0.5 m above terrain here,
+  // so heightAt is only a floor guard, not the support — the support is the
+  // registered fuselage, which the terrain-clearance check cannot see. Intent
+  // declared: unsupported.
+  {
+    const { x: AX, z: AZ, yaw: YA, pitch: P, roll: RL } = PLANE;
+    const fT = new THREE.Object3D();
+    fT.position.set(AX, heightAt(AX, AZ) - 0.55, AZ);
+    fT.rotation.order = "YXZ";
+    fT.rotation.set(-P, YA, RL);
+    fT.updateMatrixWorld(true);
+    // cargo floor top is local y -1.125; aft bay clear of the spilled cargo
+    const w = fT.localToWorld(new THREE.Vector3(0.35, -1.125, 9.8));
+    const y = Math.max(w.y, heightAt(w.x, w.z) + 0.01);
+    unit(makeCache(), w.x, y, w.z, "loot_cache", YA + 0.3, "children", { unsupported: true });
+  }
+
+  // 2 · SUBURB — inside house A (-166, 123), on the foundation slab, clear of
+  // the door aperture (x -165.1 / z 120.2), the partition (x -165.6) and the
+  // chimney breast (-168.7, 124.8)
+  {
+    const cx = -166.8, cz = 124.6;
+    unit(makeCache(), cx, heightAt(cx, cz) + 0.05, cz, "loot_cache", 0.2 + rng() * 0.2, "children");
+  }
+
+  // 3 · CHECKPOINT — beside the supply-crate cluster (-9, 164), just off its
+  // footprint, facing the lane
+  {
+    const cx = -11.0, cz = 165.6;
+    unit(makeCache(), cx, heightAt(cx, cz), cz, "loot_cache", -0.4 + rng() * 0.2, "children");
+  }
+
+  // 4 · JUNKYARD — near the gantry hoist (181.4, -107), outside its leg
+  // footprint (x <= 183.5) and 1.1 m clear of the east rail line
+  {
+    const cx = 184.3, cz = -110.2;
+    unit(makeCache(), cx, heightAt(cx, cz), cz, "loot_cache", 0.9 + rng() * 0.3, "children");
+  }
+}
+
+// ═══════════════════ 6 · GORETUSK WALLOW (crash-site boss arena) ═══════════════════
+// Something big beds down beside the wreck: a churned-mud wallow ring, scrap
+// panels raked by tusks, gnawed bones. Cross-agent contract: ONE marker
+// registers role "boss_arena_goretusk" — a trampled TER09 disc at the arena
+// centre, invisible-ish under the mud but present in the registry; its
+// position is the mini-boss spawn point. Own RNG stream (66437).
+
+function buildGoretuskArena(refs: WorldRefs, rng: () => number) {
+  const { unit } = makeOuterBuilder(refs);
+  // open ground NE of the fuselage — clear of the debris trail (local x 0.5-2.5),
+  // the sheared wing (-14, 6), engine B (5.5, 9.5) and the tail (1.5, 27)
+  const [cx, cz] = l2w(PLANE.x, PLANE.z, PLANE.yaw, 18, 8);
+  const mud = matOf("TER09", 4);
+
+  // THE MARKER — the wallow's trampled centre disc. No collider; you walk the
+  // mud. Spawn point = this disc's position.
+  groundPatch(refs, cx, cz, 3.4, mud, "boss_arena_goretusk");
+  // trample ring: satellite scuffs where it turns in its sleep
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + (rng() - 0.5) * 0.5;
+    const r = 4.4 + rng() * 1.3;
+    groundPatch(refs, cx + Math.cos(a) * r, cz + Math.sin(a) * r, 1.0 + rng() * 0.8, mud, "trample patch");
+  }
+
+  // ── tusk-gouged scrap markers: wreck panels raked parallel, half-buried ──
+  {
+    const g = new THREE.Group();
+    const panelMats = [matOf("MET03", 1.5), matOf("MET01", 1.5), matOf("MET02", 1.5)];
+    const gouge = dark();
+    for (let i = 0; i < 3; i++) {
+      const a = 0.7 + i * 2.1 + (rng() - 0.5) * 0.4;
+      const r = 5.2 + rng() * 0.9;
+      const px = Math.cos(a) * r, pz = Math.sin(a) * r;
+      const panel = new THREE.Group();
+      const lean = 0.9 + rng() * 0.5;
+      panel.add(part(flatBox(1.5, 0.05, 0.9), panelMats[i], { pos: [0, 0.32, 0], rot: [lean, 0, 0] }));
+      // three parallel gouges: bright-metal furrows torn across the panel face
+      for (const gx of [-0.22, 0, 0.22]) {
+        panel.add(part(flatBox(0.05, 0.02, 0.8), gouge, { pos: [gx, 0.35, 0.01], rot: [lean, 0.12, 0], shadow: false }));
+      }
+      panel.position.set(px, heightAt(cx + px, cz + pz) - heightAt(cx, cz) - 0.06, pz);
+      panel.rotation.y = rng() * Math.PI;
+      g.add(panel);
+    }
+    // children bed into the wallow mud by design
+    unit(g, cx, heightAt(cx, cz), cz, "tusk-gouged scrap", 0, "children", { belowGrade: true, interpenetrates: true });
+  }
+
+  // ── gnawed bones: rib arcs and long bones in the mud (dressing, no snag) ──
+  {
+    const g = new THREE.Group();
+    const bone = matOf("CRV02", 1);
+    for (let i = 0; i < 4; i++) {
+      const a = rng() * Math.PI * 2;
+      const r = 1.2 + rng() * 3.4;
+      const bx = cx + Math.cos(a) * r, bz = cz + Math.sin(a) * r;
+      const by = heightAt(bx, bz);
+      if (i % 2 === 0) {
+        // rib arc, sprung out of the mud
+        g.add(part(new THREE.TorusGeometry(0.42 + rng() * 0.15, 0.032, 6, 12, 1.5 + rng() * 0.5), bone, {
+          pos: [bx - cx, by - heightAt(cx, cz) + 0.06, bz - cz],
+          rot: [Math.PI / 2 + (rng() - 0.5) * 0.6, rng() * 3, (rng() - 0.5) * 0.8],
+        }));
+      } else {
+        // long bone with both knuckle ends
+        const len = 0.6 + rng() * 0.35;
+        const yaw = rng() * Math.PI;
+        const lx = bx - cx, lz = bz - cz, ly = by - heightAt(cx, cz) + 0.045;
+        g.add(part(cyl(0.028, 0.034, len, 7), bone, { pos: [lx, ly, lz], rot: [Math.PI / 2, yaw, 0] }));
+        for (const e of [-1, 1]) {
+          g.add(part(new THREE.SphereGeometry(0.05, 7, 6), bone, {
+            pos: [lx + Math.sin(yaw) * e * len / 2, ly, lz + Math.cos(yaw) * e * len / 2],
+          }));
+        }
+      }
+    }
+    unit(g, cx, heightAt(cx, cz), cz, "goretusk bones", 0, false, { belowGrade: true, interpenetrates: true });
+  }
+}
+
 // ═══════════════════════════ entry point ═══════════════════════════
 
 export function buildOuter(refs: WorldRefs): void {
@@ -1175,4 +1347,7 @@ export function buildOuter(refs: WorldRefs): void {
   buildSuburb(refs, rng);
   buildCheckpoint(refs, rng);
   buildJunkyard(refs, rng);
+  // additive batches on their own streams — the four site sequences above are untouched
+  buildLootCaches(refs, makeRng(55123));
+  buildGoretuskArena(refs, makeRng(66437));
 }

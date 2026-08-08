@@ -166,6 +166,53 @@ export class Generator {
 
   private poles: THREE.Group[] = [];
 
+  // ── player-built floodlight poles (build mode) ──
+  // The build system registers role "floodlight_pole" objects at runtime. The
+  // generator adopts them: while the generator is lit they carry their own
+  // light, and their positions join lamps(), so wave-night repulsion covers
+  // them exactly like the perimeter poles. Absent the role, nothing happens —
+  // the base game never notices.
+  private adoptedPoles: Array<{ obj: THREE.Object3D; x: number; z: number }> = [];
+  private static readonly MAX_EXTERNAL_POLES = QUALITY.mobile ? 3 : 6;
+
+  /**
+   * Pick up any newly placed floodlight poles. Called once a second from the
+   * engine tick; the registry scan is cheap and placement is rare.
+   */
+  syncExternalPoles() {
+    if (this.adoptedPoles.length >= Generator.MAX_EXTERNAL_POLES) return;
+    const scene = this.group.parent;
+    for (const rec of assetRegistry) {
+      if (rec.role !== "floodlight_pole") continue;
+      if (this.adoptedPoles.some((a) => a.obj === rec.object)) continue;
+      if (this.adoptedPoles.length >= Generator.MAX_EXTERNAL_POLES) break;
+      const wp = new THREE.Vector3();
+      rec.object.getWorldPosition(wp);
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(rec.object.quaternion);
+      if (QUALITY.mobile) {
+        const pt = new PointLight(0xffd9a0, 0, 22, 1.8);
+        pt.position.set(wp.x, wp.y + 4.1, wp.z);
+        scene?.add(pt);
+        this.points.push(pt);
+      } else {
+        const spot = new SpotLight(0xffe0b0, 0, 34, 0.62, 0.5, 1.5);
+        spot.position.set(wp.x, wp.y + 4.12, wp.z);
+        const target = new THREE.Object3D();
+        target.position.set(wp.x + fwd.x * 4, heightAt(wp.x + fwd.x * 4, wp.z + fwd.z * 4), wp.z + fwd.z * 4);
+        scene?.add(target);
+        spot.target = target;
+        scene?.add(spot);
+        this.spots.push(spot);
+      }
+      // A pole adopted while the generator is already lit should glow now.
+      if (this.lit) {
+        for (const s of this.spots) s.intensity = SPOT_INTENSITY;
+        for (const p of this.points) p.intensity = POINT_INTENSITY;
+      }
+      this.adoptedPoles.push({ obj: rec.object, x: wp.x, z: wp.z });
+    }
+  }
+
   /** The scene attaches the group and its poles together. */
   addToScene(scene: THREE.Scene) {
     scene.add(this.group);
@@ -190,10 +237,13 @@ export class Generator {
    * World positions of the floodlight poles — but only while they are LIT.
    * Gameplay reads this on wave nights: the horde slows and veers inside these
    * pools of light, so a fueled generator is a real wall, not a cosmetic one.
+   * Includes adopted player-built floodlight_pole assets.
    */
   lamps(): Array<{ x: number; z: number }> {
     if (!this.lit) return [];
-    return this.poles.map((g) => ({ x: g.position.x, z: g.position.z }));
+    const out = this.poles.map((g) => ({ x: g.position.x, z: g.position.z }));
+    for (const a of this.adoptedPoles) out.push({ x: a.x, z: a.z });
+    return out;
   }
 
   update(dt: number, nightness: number) {

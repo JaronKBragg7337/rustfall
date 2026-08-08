@@ -6,6 +6,7 @@ import { MECH_PARTS } from "@/game/entities";
 import { IS_TOUCH, type QualityPreset } from "@/game/constants";
 import { ITEMS, SLOT_COUNT } from "@/game/inventory";
 import { RECIPES } from "@/game/weapons";
+import { TRADE_OFFERS } from "@/game/trade";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ const INITIAL_HUD: HudState = {
   firstPerson: false, devMode: false, safe: false, cinematic: false, shotName: "", shotCaption: "", shotProgress: 0,
   waveNight: false, quest: null,
   inventory: new Array(SLOT_COUNT).fill(null), inventoryOpen: false, craftOpen: false,
+  tradeOpen: false, goretusk: null, turretHint: null,
   weapon: { id: "pulse", name: "PULSE SIDEARM", glyph: "🔫" }, hasWeapons: false, quality: "AUTO",
 };
 
@@ -187,6 +189,16 @@ export default function App() {
             </div>
             <div className="h-2 sm:h-2.5 bg-zinc-900/80 border border-red-800">
               <div className="h-full bg-red-600" style={{ width: `${(hud.bossHp / 500) * 100}%` }} />
+            </div>
+          </div>
+        )}
+        {hud.goretusk && (
+          <div className="mt-1.5 sm:mt-2 w-40 sm:w-64">
+            <div className="flex justify-between text-[8px] sm:text-[10px] tracking-widest text-lime-300">
+              <span>⚠ GORETUSK ALPHA</span><span>{hud.goretusk.hp}/{hud.goretusk.max}</span>
+            </div>
+            <div className="h-2 sm:h-2.5 bg-zinc-900/80 border border-lime-800">
+              <div className="h-full bg-lime-600" style={{ width: `${(hud.goretusk.hp / hud.goretusk.max) * 100}%` }} />
             </div>
           </div>
         )}
@@ -446,6 +458,14 @@ export default function App() {
         </div>
       )}
 
+      {/* ── turret upkeep hint: shown while standing near a starving turret ── */}
+      {hud.turretHint && !hud.cinematic && (
+        <div className="absolute bottom-20 sm:bottom-28 left-1/2 -translate-x-1/2 z-20 rounded border border-orange-500/60
+                        bg-zinc-950/85 px-3 py-1 text-orange-200 text-[9px] sm:text-[10px] tracking-[0.2em] whitespace-nowrap">
+          ⚠ {hud.turretHint}
+        </div>
+      )}
+
       {/* ── interact prompt ── */}
       {hud.interact && !hud.cinematic && (
         <div className="absolute bottom-28 sm:bottom-36 left-1/2 -translate-x-1/2 z-20 rounded border border-amber-500/60 bg-zinc-950/85 px-3 py-1.5 sm:px-4 sm:py-2 text-amber-200 text-[10px] sm:text-xs tracking-[0.2em] whitespace-nowrap">
@@ -601,6 +621,61 @@ export default function App() {
         </div>
       )}
 
+      {/* ── SAL's BARTER panel (E at the trading post) — same one-owner-per-
+              pointer contract as the backpack: every button is DOM above the
+              canvas, so canvas touch routing never sees these presses. ── */}
+      {hud.tradeOpen && !hud.cinematic && (
+        <div className="absolute inset-0 z-40 flex items-end sm:items-center justify-center"
+             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+             onPointerDown={() => g()?.closePanels()}>
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            className="w-[min(24rem,calc(100vw-1rem))] rounded-md border border-yellow-700/70 bg-zinc-950/95
+                       p-3 sm:p-4 text-zinc-200 shadow-2xl mb-2 sm:mb-0">
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] sm:text-xs font-bold tracking-[0.25em] text-yellow-300">💰 SAL'S BARTER</div>
+              <button onPointerDown={() => g()?.closePanels()}
+                className="w-8 h-8 -mr-1 rounded text-zinc-400 hover:text-zinc-100 text-base leading-none">✕</button>
+            </div>
+            <div className="text-[9px] sm:text-[10px] tracking-widest text-zinc-500 mb-2">
+              SCRAP ON HAND: <span className="text-amber-300">⚙ {hud.scrap}</span>
+            </div>
+            {TRADE_OFFERS.map((o) => {
+              const gunItem = o.id === "buy_rifle" ? "pipe_rifle" : o.id === "buy_shotgun" ? "scrap_shotgun" : null;
+              const owned = gunItem !== null && hud.inventory.some((s) => s !== null && s.id === gunItem);
+              const afford = hud.scrap >= o.cost;
+              return (
+                <div key={o.id} className="flex items-center gap-2 rounded border border-zinc-700 bg-zinc-900/50 px-2 py-2 mb-1.5">
+                  <span className="text-2xl leading-none">{o.glyph}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] sm:text-xs font-bold tracking-widest text-zinc-100">
+                      <span className={o.kind === "sell" ? "text-emerald-400" : "text-yellow-300"}>
+                        {o.kind === "sell" ? "SELL" : "BUY"}
+                      </span>{" "}{o.name}
+                    </div>
+                    <div className="text-[8px] sm:text-[9px] text-zinc-500 leading-snug">{o.blurb}</div>
+                  </div>
+                  <button
+                    onPointerDown={(e) => { e.stopPropagation(); g()?.trade(o.id); }}
+                    disabled={owned || !afford}
+                    className={`shrink-0 px-2.5 py-2 rounded border text-[10px] sm:text-[11px] tracking-widest font-bold
+                      ${owned
+                        ? "border-emerald-700 text-emerald-400"
+                        : afford
+                          ? "border-yellow-500 text-yellow-200 active:bg-yellow-500/25"
+                          : "border-zinc-800 text-zinc-600"}`}>
+                    {owned ? "OWNED" : o.kind === "sell" ? `⚙${o.cost} → ⛽1` : `⚙ ${o.cost}`}
+                  </button>
+                </div>
+              );
+            })}
+            <div className="mt-1 text-[9px] sm:text-[10px] text-zinc-500 leading-snug">
+              SAL deals in scrap only. Guns are cheaper at the workbench — if you can get home.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── TOUCH: floating joystick, drawn where the thumb landed ── */}
       {joyVisible && touch && (
         <div className="absolute z-20 pointer-events-none" style={{ left: touch.joyOx, top: touch.joyOy, transform: "translate(-50%,-50%)" }}>
@@ -614,7 +689,7 @@ export default function App() {
 
       {/* ── TOUCH: action cluster, placed in the right thumb's natural arc ──
               Hidden while a panel (backpack / workbench) owns the screen. */}
-      {IS_TOUCH && ready && !hud.cinematic && !hud.inventoryOpen && !hud.craftOpen && (
+      {IS_TOUCH && ready && !hud.cinematic && !hud.inventoryOpen && !hud.craftOpen && !hud.tradeOpen && (
         <div className="absolute z-30 right-3 bottom-5" style={{ paddingRight: "env(safe-area-inset-right)", paddingBottom: "env(safe-area-inset-bottom)" }}>
           <div className="relative w-40 h-40">
             <TouchBtn label="FIRE" className="absolute right-0 bottom-8 w-[68px] h-[68px] text-[11px]"
