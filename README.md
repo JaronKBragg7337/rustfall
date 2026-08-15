@@ -3,7 +3,7 @@
 A deterministic post-apocalyptic wasteland survival vertical slice, built with **Three.js + React + TypeScript + Vite**.
 
 **▶ Play it:** https://jaronkbragg7337.github.io/rustfall/
-
+Also hosted at: https://www.heartbeatobservatory.com/games/rustfall/
 ## The world
 
 - **Open wasteland** — 200×200 m of cracked highways, ruined blocks, container yards, biome fields (scorch, rust dunes, rubble, mud)
